@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { buildBedrockModel } from './bedrock.js';
-import { YsmControllerRuntime, controllerAnimationNames } from './ysm-controller.js';
+import { YsmControllerRuntime, mergeControllerFiles, normalizeControllers } from './ysm-controller.js';
 import { YsmSkeleton } from './skeleton.js';
-import { YsmAnimationPlayer, createYsmAnimationContext, advanceYsmPhysics, evaluateMolang } from './ysm-animation.js';
+import { YsmAnimationPlayer, createYsmAnimationContext, advanceYsmPhysics, evaluateMolang, executeMolangStatements } from './ysm-animation.js';
 import { encodeApng } from './apng.js';
 import { DEFAULT_MODEL_BASE } from './model-config.js';
 
@@ -74,14 +74,25 @@ export class ModelViewer {
   async load() {
     const source=this.fileMap;
     this.time=0;this.elapsedTime=0;
-    const [model, animation, extraAnimation, metadata, controllerData] = await Promise.all([
-      source ? source.model.text().then(JSON.parse) : loadJson(`${DEFAULT_MODEL_BASE}models/main.json`),
-      source?.animation ? source.animation.text().then(JSON.parse) : (source ? Promise.resolve({animations:{}}) : loadJson(`${DEFAULT_MODEL_BASE}animations/main.animation.json`)),
-      source?.extraAnimation ? source.extraAnimation.text().then(JSON.parse) : (source ? Promise.resolve({animations:{}}) : loadJson(`${DEFAULT_MODEL_BASE}animations/extra.animation.json`).catch(()=>({animations:{}}))),
-      source?.metadata ? source.metadata.text().then(JSON.parse) : loadJson(`${DEFAULT_MODEL_BASE}ysm.json`).catch(()=>({})),
-      source ? Promise.resolve({}) : loadJson(`${DEFAULT_MODEL_BASE}controller/main_controllers.json`).catch(()=>({})),
+    const metadata=source?.metadata?await source.metadata.text().then(JSON.parse):await loadJson(`${DEFAULT_MODEL_BASE}ysm.json`).catch(()=>({}));
+    const declaredAnimations=metadata.files?.player?.animation||{};
+    const declaredAnimationEntries=Object.entries(declaredAnimations).map(([id,path])=>({id,path}));
+    const animationEntries=source?.animationFiles?.length?source.animationFiles:source?[...(source.animation?[{id:'main',file:source.animation}]:[]),...(source.extraAnimation?[{id:'extra',file:source.extraAnimation}]:[])]:declaredAnimationEntries.length?declaredAnimationEntries:[{id:'main',path:'animations/main.animation.json'},{id:'extra',path:'animations/extra.animation.json'}];
+    const declaredControllerPaths=Array.isArray(metadata.files?.player?.animation_controllers)?metadata.files.player.animation_controllers:[];
+    const controllerEntries=source?.controllerFiles?.length?source.controllerFiles:source?[]:declaredControllerPaths.map(path=>({path}));
+    const loadEntry=async entry=>{
+      if(entry.file)return entry.file.text().then(JSON.parse);
+      if(entry.path)return loadJson(`${DEFAULT_MODEL_BASE}${String(entry.path).replaceAll('\\','/').split('/').map(encodeURIComponent).join('/')}`);
+      return null;
+    };
+    const [model,animationFiles,controllerFiles]=await Promise.all([
+      source?source.model.text().then(JSON.parse):loadJson(`${DEFAULT_MODEL_BASE}models/main.json`),
+      Promise.all(animationEntries.map(entry=>loadEntry(entry).catch(error=>{console.warn(`Could not load animation file ${entry.path||entry.id}:`,error);return null;}))),
+      Promise.all(controllerEntries.map(entry=>loadEntry(entry).catch(error=>{console.warn(`Could not load controller file ${entry.path}:`,error);return null;}))),
     ]);
-  const variants=textureSources(source,metadata,DEFAULT_MODEL_BASE);
+    const animations={};for(const file of animationFiles)Object.assign(animations,file?.animations||{});
+    const controllers=mergeControllerFiles(controllerFiles.filter(Boolean));
+    const variants=textureSources(source,metadata,DEFAULT_MODEL_BASE);
     this.textureVariants=(await Promise.all(variants.map(async entry=>{
       let objectUrl;
       try{
@@ -112,14 +123,11 @@ export class ModelViewer {
     this.root=buildBedrockModel({bedrockModel:model['minecraft:geometry'][0]},[this.material,this.translucentMaterial]);
     installGpuSkinning(this.material,this.root.userData.boneTexture);
     installGpuSkinning(this.translucentMaterial,this.root.userData.boneTexture);
-    this.bones=this.root.userData.bones; this.animations={...(animation.animations||{}),...(extraAnimation.animations||{})};
+    this.bones=this.root.userData.bones; this.animations=animations;
     this.skeleton=new YsmSkeleton(this.root.userData.skeletonBones);
     this.animationPlayer=new YsmAnimationPlayer(this.skeleton);
     this.animationContext=createYsmAnimationContext();
     this.bindAnimationContext(this.animationContext);
-    const controllers=controllerData.animation_controllers||{};
-    this.parallelController=controllers['player.parallel_0']||null;
-    this.preParallelController=controllers['player.pre_parallel_0']||null;
     // YSM's folder schema places properties at the document root. Also accept
     // older metadata-wrapped exports so plugin options are not silently lost.
     const props=metadata.properties||metadata.metadata?.properties||{};
@@ -132,12 +140,19 @@ export class ModelViewer {
     this.extraAnimationNames=new Set([...slotNames].filter(name=>Object.hasOwn(this.animations,name)));
     this.previewAnimationName=typeof props.preview_animation==='string'?props.preview_animation.trim():'';
     this.disablePreviewRotation=isYsmFlagEnabled(props.disable_preview_rotation??props.disablePreviewRotation);
+    const previewPose=previewCardPose(this.disablePreviewRotation);
+    const previewTilt=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0),THREE.MathUtils.degToRad(previewPose.pitch));
+    const previewYawRotation=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0),THREE.MathUtils.degToRad(previewPose.yawOffset));
+    this.root.quaternion.copy(previewTilt).multiply(previewYawRotation);
+    const previewClip=this.animations[this.previewAnimationName];
+    const previewRoot=this.skeleton.bones.find((bone,index)=>this.skeleton.parent[index]<0&&previewClip?.bones?.[bone.name]?.rotation!==undefined);
+    this.previewRootRotationClip=previewRoot?{bones:{[previewRoot.name]:{rotation:previewClip.bones[previewRoot.name].rotation}}}:null;
     const widthScale=Number.isFinite(Number(props.width_scale))?Number(props.width_scale):0.7;
     const heightScale=Number.isFinite(Number(props.height_scale))?Number(props.height_scale):0.7;
     // IGeoRenderer applies height_scale to X/Z and width_scale to Y.
     this.modelScale=new THREE.Vector3(heightScale,widthScale,heightScale);
     this.rootPose=new THREE.Matrix4().makeScale(this.modelScale.x,this.modelScale.y,this.modelScale.z);
-    this.controllerRuntime=new YsmControllerRuntime(new Map());
+    this.controllerRuntime=new YsmControllerRuntime(normalizeControllers(controllers));
     this.scene.add(this.root);
     // Render the authored model pose first. Animation sampling is kept out of
     // the base render path because YSM's Molang helper layers are not
@@ -287,24 +302,30 @@ export class ModelViewer {
   }
   applyFrame() {
     if(!this.skeleton||!this.root)return;
-    // Same order as the source Model.pose(): reset, pre-parallel, controller
-    // animations, selected animation, parallel, then bone matrices/upload.
+    // Keep the game's player layers in order: pre-parallel, pre-main,
+    // selected state animation, post-main, then parallel overlays.
     this.skeleton.reset();
     const context=this.animationContext;
     context.time=this.time;context.lifeTime=this.elapsedTime;context.query.anim_time=this.time;context.query.life_time=this.elapsedTime;
     context.ctrl.playing_extra_animation=this.extraAnimationNames?.has(this.animationName)?1:0;
-    const applyController=(controller,fallback,controllerTime)=>{
-      context.query.anim_time=controllerTime;
-      const names=controllerAnimationNames(controller,context,evaluateMolang);
-      for(const name of names||fallback){const clip=this.animations?.[name];if(clip)this.animationPlayer.apply(clip,controllerTime,context);}
+    for(const name of ['idle','walk','run','jump'])context.ctrl[name]=this.animationName===name?1:0;
+    this.controllerRuntime?.update(context,evaluateMolang,executeMolangStatements);
+    const active=this.controllerRuntime?.activeAnimations(context,evaluateMolang)||[];
+    const applyEntries=(entries,time)=>{context.query.anim_time=time;for(const {name} of entries){const clip=this.animations?.[name];if(clip)this.animationPlayer.apply(clip,time,context);}};
+    const applySlot=(slot,fallbackPrefix=null)=>{
+      const matcher=new RegExp(`^player\\.${slot}(?:_|$)`),controllers=[...this.controllerRuntime.controllers.keys()].filter(name=>matcher.test(name));
+      const entries=active.filter(entry=>controllers.includes(entry.controller));
+      if(controllers.length)applyEntries(entries,this.elapsedTime);
+      else if(fallbackPrefix){const names=Object.keys(this.animations||{}).filter(name=>name.startsWith(fallbackPrefix)).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));applyEntries(names.map(name=>({name})),this.elapsedTime);}
     };
-    // YSM runs every parallel slot in its own controller. These spring/sine
-    // layers keep advancing while the selected walk/run/jump clip loops.
-    applyController(this.preParallelController,Object.keys(this.animations||{}).filter(name=>name.startsWith('pre_parallel')),this.elapsedTime);
-    this.controllerRuntime?.update({time:this.time,'query.anim_time':this.time,'query.life_time':this.elapsedTime});
-    for(const name of this.controllerRuntime?.activeAnimations?.()||[]){const clip=this.animations?.[name];if(clip)this.animationPlayer.apply(clip,this.elapsedTime,context);}
+    applySlot('pre_parallel','pre_parallel');
+    applySlot('pre_main');
     const main=this.animations?.[this.animationName];if(main)this.animationPlayer.apply(main,this.time,context);
-    applyController(this.parallelController,Object.keys(this.animations||{}).filter(name=>name.startsWith('parallel')),this.elapsedTime);
+    applySlot('post_main');
+    applySlot('parallel','parallel');
+    // Carry the authored model-card root angle into the interactive viewer,
+    // while leaving its preview-only translation, scale, and motion out.
+    if(this.previewRootRotationClip&&this.animationName!==this.previewAnimationName)this.animationPlayer.apply(this.previewRootRotationClip,0,context);
     const matrices=this.skeleton.computeMatrices(this.rootPose);
     this.root.userData.setAnimationBoneVisibility(this.skeleton.visible);
     this.root.userData.updateBoneTexture(matrices,this.skeleton.normalMatrices);

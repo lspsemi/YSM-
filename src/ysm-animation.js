@@ -77,6 +77,11 @@ function evaluated(value,ctx,fallback){
   if(value===undefined)return fallback;
   const n=Number(evalExpr(value,ctx));return Number.isFinite(n)?n:fallback;
 }
+export function executeMolangStatement(statement,context){
+  const source=String(statement??'').trim();if(!source||source.startsWith("'")||source.startsWith('"'))return;
+  try{new Function('v','ysm','query','ctrl','math',source.replace(/\bq\./g,'query.'))(context.v,context.ysm,context.query,context.ctrl,math);}catch{}
+}
+export function executeMolangStatements(statements,context){for(const statement of Array.isArray(statements)?statements:[statements])executeMolangStatement(statement,context);}
 function executeTimeline(animation,time,ctx,states){
   if(!animation.timeline||typeof animation.timeline!=='object')return;
   const length=Number(animation.animation_length)||0,loop=animation.loop===true||animation.loop==='true';
@@ -84,7 +89,7 @@ function executeTimeline(animation,time,ctx,states){
   let current=time,cycle=0;
   if(loop&&length>0){cycle=Math.floor(time/length);current=time%length;}
   const events=Object.entries(animation.timeline).map(([t,expr])=>({t:Number(t),expr:Array.isArray(expr)?expr:[expr]})).filter(e=>Number.isFinite(e.t)).sort((a,b)=>a.t-b.t);
-  const run=(event)=>{for(const statement of event.expr){if(typeof statement!=='string')continue;const s=statement.trim();if(!s||s.startsWith("'")||s.startsWith('"'))continue;try{new Function('v','ysm','query','ctrl','math',s.replace(/\bq\./g,'query.'))(ctx.v,ctx.ysm,ctx.query,ctx.ctrl,math);}catch{}}};
+  const run=(event)=>executeMolangStatements(event.expr,ctx);
   if(state.last<0){for(const e of events)if(e.t<=current)run(e);}
   else if(cycle!==state.cycle||current<state.last){for(const e of events)if(e.t>state.last||e.t<=current)run(e);}
   else for(const e of events)if(e.t>state.last&&e.t<=current)run(e);

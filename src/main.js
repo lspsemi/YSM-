@@ -4,8 +4,31 @@ import { DEFAULT_MODEL_BASE, DEFAULT_MODEL_PAGE, DEFAULT_MODEL_DOWNLOAD } from '
 
 const icons = { Box, Boxes, BookOpen, Users, Moon, Sun, ArrowLeft, ArrowUpRight, Download, ShoppingBag, Check, Info, Scan, Circle, MessageSquare, Archive, RotateCcw, Maximize, Minimize, Grid2X2, Camera, RotateCw, Play, Pause, PersonStanding, Footprints, MoveUp, ChevronLeft, ChevronRight, ChevronDown, Link, Heart, ShieldCheck, MousePointer2, X, Eye, Sparkles, FileBox, Upload };
 const icon = name => `<i data-lucide="${name}"></i>`;
+const materialIcon = name => `<span class="material-symbol-icon" aria-hidden="true">${name}</span>`;
 const external = 'target="_blank" rel="noopener noreferrer"';
 const source = DEFAULT_MODEL_PAGE;
+const minecraftColors={0:'#000000',1:'#0000aa',2:'#00aa00',3:'#00aaaa',4:'#aa0000',5:'#aa00aa',6:'#ffaa00',7:'#aaaaaa',8:'#555555',9:'#5555ff',a:'#55ff55',b:'#55ffff',c:'#ff5555',d:'#ff55ff',e:'#ffff55',f:'#ffffff'};
+function minecraftTextRuns(value){
+  const format={color:null,bold:false,italic:false,underline:false,strike:false},runs=[];let buffer='';
+  const flush=()=>{if(buffer){runs.push({text:buffer,...format});buffer='';}};
+  const reset=()=>{format.color=null;format.bold=false;format.italic=false;format.underline=false;format.strike=false;};
+  const source=String(value??'');
+  for(let i=0;i<source.length;i++){
+    if(source[i]!=='§'||i+1>=source.length){buffer+=source[i];continue;}
+    const hex=/^§x(?:§[0-9a-f]){6}/i.exec(source.slice(i));
+    if(hex){flush();format.color='#'+[...hex[0].matchAll(/§([0-9a-f])/gi)].map(item=>item[1]).join('');format.bold=false;format.italic=false;format.underline=false;format.strike=false;i+=hex[0].length-1;continue;}
+    const code=source[i+1].toLowerCase();if(!/[0-9a-fk-or]/.test(code)){buffer+=source[i];continue;}flush();i++;
+    if(minecraftColors[code]){reset();format.color=minecraftColors[code];}
+    else if(code==='r')reset();
+    else if(code==='l')format.bold=true;else if(code==='o')format.italic=true;else if(code==='n')format.underline=true;else if(code==='m')format.strike=true;
+  }
+  flush();return runs;
+}
+const escapeText=value=>String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
+const minecraftRunStyle=run=>[run.color?`color:${run.color}`:'',run.bold?'font-weight:700':'',run.italic?'font-style:italic':'',run.underline||run.strike?`text-decoration:${[run.underline?'underline':'',run.strike?'line-through':''].filter(Boolean).join(' ')}`:''].filter(Boolean).join(';');
+const minecraftTextHtml=value=>minecraftTextRuns(value).map(run=>{const style=minecraftRunStyle(run);return `<span${style?` style="${style}"`:''}>${escapeText(run.text)}</span>`;}).join('');
+const minecraftTextSvg=value=>minecraftTextRuns(value).map(run=>{const style=minecraftRunStyle(run);return `<tspan${style?` style="${style.replaceAll('color:','fill:')}"`:''}>${escapeText(run.text)}</tspan>`;}).join('');
+const stripWheelMarker=value=>String(value??'').replace(/^((?:§x(?:§[0-9a-f]){6}|§[0-9a-fk-or])*)#/i,'$1');
 
 document.querySelector('#app').innerHTML = `
   <header class="site-header"><div class="header-inner">
@@ -34,7 +57,7 @@ document.querySelector('#app').innerHTML = `
         </div>
         <div id="preview-panel" role="tabpanel" aria-labelledby="tab-preview" hidden>
           <div class="preview-heading"><span><span class="tiny-dot"></span>实时模型预览</span><span id="render-status">准备加载</span></div>
-          <div class="viewer-shell" id="viewer-shell"><div id="viewport"><canvas id="scene" aria-label="香奈美三维模型，拖动旋转，滚轮缩放"></canvas><div class="loading-state" id="loading-state"><span class="spinner"></span><strong>正在准备模型</strong><span>加载几何、贴图与动画…</span></div><div class="viewer-tools"><button class="icon-button" id="pose-walk" title="走" aria-label="走">${icon('footprints')}</button><button class="icon-button" id="pose-run" title="跑" aria-label="跑">${icon('footprints')}</button><button class="icon-button" id="pose-jump" title="跳" aria-label="跳">${icon('move-up')}</button><button class="icon-button" id="action-wheel-button" title="动作轮盘" aria-label="动作轮盘" aria-haspopup="menu" aria-expanded="false">${icon('circle')}</button><button class="wheel-close-button" id="action-wheel-close" type="button" aria-label="关闭动作轮盘" title="关闭轮盘" hidden>×</button><button class="icon-button" id="center-view-button" title="居中视角" aria-label="居中视角">${icon('scan')}</button><button class="icon-button" id="reset-pose-button" title="重置姿势" aria-label="重置姿势">${icon('rotate-ccw')}</button><button class="icon-button" id="fullscreen-button" title="全屏" aria-label="全屏">${icon('maximize')}</button><div class="texture-picker" id="texture-picker" hidden><button class="texture-picker-trigger" id="texture-picker-trigger" type="button" aria-label="选择材质" title="选择材质" aria-haspopup="listbox" aria-expanded="false"><span id="texture-current">texture</span>${icon('chevron-down')}</button><div class="texture-picker-options" id="texture-picker-options" role="listbox" aria-label="模型材质" hidden></div></div></div><div class="action-wheel" id="action-wheel" role="menu" aria-label="选择模型动作" hidden></div><div class="roaming-toggles" id="roaming-toggles" aria-label="模型部件显示开关" hidden></div><div class="view-presets"><button class="selected" data-view="front">正面</button><button data-view="side">侧面</button><button data-view="back">背面</button></div><div class="axis-widget" aria-hidden="true"><span>Y</span><span>Z</span><span>X</span></div><div class="viewport-hint">${icon('mouse-pointer-2')} 拖动旋转 <span>·</span> 滚轮缩放 <span>·</span> 右键平移</div></div>
+          <div class="viewer-shell" id="viewer-shell"><div id="viewport"><canvas id="scene" aria-label="香奈美三维模型，拖动旋转，滚轮缩放"></canvas><div class="loading-state" id="loading-state"><span class="spinner"></span><strong>正在准备模型</strong><span>加载几何、贴图与动画…</span></div><div class="viewer-tools"><button class="icon-button" id="pose-walk" title="走" aria-label="走">${materialIcon('directions_walk')}</button><button class="icon-button" id="pose-run" title="跑" aria-label="跑">${materialIcon('directions_run')}</button><button class="icon-button" id="pose-jump" title="跳" aria-label="跳">${materialIcon('arrow_upward')}</button><button class="icon-button" id="action-wheel-button" title="动作轮盘" aria-label="动作轮盘" aria-haspopup="menu" aria-expanded="false">${materialIcon('donut_large')}</button><button class="wheel-close-button" id="action-wheel-close" type="button" aria-label="关闭动作轮盘" title="关闭轮盘" hidden>×</button><button class="icon-button" id="center-view-button" title="居中视角" aria-label="居中视角">${materialIcon('filter_center_focus')}</button><button class="icon-button" id="reset-pose-button" title="重置姿势" aria-label="重置姿势">${materialIcon('restart_alt')}</button><button class="icon-button" id="fullscreen-button" title="全屏" aria-label="全屏">${materialIcon('fullscreen')}</button><div class="texture-picker" id="texture-picker" hidden><button class="texture-picker-trigger" id="texture-picker-trigger" type="button" aria-label="选择材质" title="选择材质" aria-haspopup="listbox" aria-expanded="false"><span id="texture-current">texture</span>${icon('chevron-down')}</button><div class="texture-picker-options" id="texture-picker-options" role="listbox" aria-label="模型材质" hidden></div></div></div><div class="action-wheel" id="action-wheel" role="menu" aria-label="选择模型动作" hidden></div><div class="view-presets"><button class="selected" data-view="front">正面</button><button data-view="side">侧面</button><button data-view="back">背面</button></div><div class="axis-widget" aria-hidden="true"><span>Y</span><span>Z</span><span>X</span></div><div class="viewport-hint">${icon('mouse-pointer-2')} 拖动旋转 <span>·</span> 滚轮缩放 <span>·</span> 右键平移</div></div>
           <div class="animation-panel"><div class="animation-top"><div class="animation-title">${icon('sparkles')} 动画 <span id="animation-name">待机</span></div><div class="animation-choices"><button data-animation="idle" class="selected">${icon('person-standing')} 待机</button><button data-animation="walk">${icon('footprints')} 行走</button><button data-animation="run">${icon('footprints')} 奔跑</button><button data-animation="jump">${icon('move-up')} 跳跃</button></div></div><div class="timeline-row"><button id="play-button" class="play-button" aria-label="暂停动画">${icon('pause')}</button><span id="time-current">0.00</span><input id="timeline" type="range" min="0" max="3" step="0.001" value="0" aria-label="动画播放进度"><span id="time-duration">3.00 s</span><select id="speed" aria-label="动画播放速度"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></div></div></div>
           <div class="preview-note">${icon('info')} 动画为基础关键帧预览，游戏内的交互效果以实际表现为准。</div>
         </div>
@@ -52,20 +75,7 @@ let viewer, viewerPromise, toastTimer, coverAnimationUrl,coverPixelSize='',cover
 let avatarObjectUrls=[];
 const safeExternalUrl=value=>{try{const url=new URL(value);return ['http:','https:'].includes(url.protocol)?url.href:'';}catch{return '';}};
 function renderMinecraftText(target,value){
-  const colors={0:'#000000',1:'#0000aa',2:'#00aa00',3:'#00aaaa',4:'#aa0000',5:'#aa00aa',6:'#ffaa00',7:'#aaaaaa',8:'#555555',9:'#5555ff',a:'#55ff55',b:'#55ffff',c:'#ff5555',d:'#ff55ff',e:'#ffff55',f:'#ffffff'};
-  const format={color:null,bold:false,italic:false,underline:false,strike:false};let buffer='';
-  const flush=()=>{if(!buffer)return;const span=document.createElement('span');span.className='minecraft-title-text';span.textContent=buffer;if(format.color)span.style.color=format.color;if(format.bold)span.style.fontWeight='700';if(format.italic)span.style.fontStyle='italic';if(format.underline||format.strike)span.style.textDecoration=[format.underline?'underline':'',format.strike?'line-through':''].filter(Boolean).join(' ');target.append(span);buffer='';};
-  const source=String(value||'');
-  for(let i=0;i<source.length;i++){
-    if(source[i]!=='§'||i+1>=source.length){buffer+=source[i];continue;}
-    const hex=/^§x(?:§[0-9a-f]){6}/i.exec(source.slice(i));
-    if(hex){flush();format.color='#'+[...hex[0].matchAll(/§([0-9a-f])/gi)].map(item=>item[1]).join('');format.bold=false;format.italic=false;format.underline=false;format.strike=false;i+=hex[0].length-1;continue;}
-    const code=source[i+1].toLowerCase();if(!/[0-9a-fk-or]/.test(code)){buffer+=source[i];continue;}flush();i++;
-    if(colors[code]){format.color=colors[code];format.bold=false;format.italic=false;format.underline=false;format.strike=false;}
-    else if(code==='r'){format.color=null;format.bold=false;format.italic=false;format.underline=false;format.strike=false;}
-    else if(code==='l')format.bold=true;else if(code==='o')format.italic=true;else if(code==='n')format.underline=true;else if(code==='m')format.strike=true;
-  }
-  flush();
+  for(const run of minecraftTextRuns(value)){const span=document.createElement('span');span.className='minecraft-title-text';span.textContent=run.text;if(run.color)span.style.color=run.color;if(run.bold)span.style.fontWeight='700';if(run.italic)span.style.fontStyle='italic';if(run.underline||run.strike)span.style.textDecoration=[run.underline?'underline':'',run.strike?'line-through':''].filter(Boolean).join(' ');target.append(span);}
 }
 function renderModelMetadata(ysmJson,avatarFiles,isImported=false){
   const metadata=ysmJson?.metadata||{},authors=Array.isArray(metadata.authors)?metadata.authors:[],files=avatarFiles instanceof Map?avatarFiles:new Map();
@@ -159,47 +169,14 @@ function refreshTexturePicker(instance){
   texturePicker.hidden=entries.length<2;
   const selected=entries.find(entry=>entry.id===instance?.currentTextureId)||entries[0];if(selected){textureCurrent.textContent=selected.label;textureTrigger.setAttribute('aria-activedescendant',`texture-option-${entries.indexOf(selected)}`);}
 }
-function closeTexturePicker(){textureOptions.hidden=true;textureTrigger.setAttribute('aria-expanded','false');}
-textureTrigger.onclick=()=>{const open=textureOptions.hidden;textureOptions.hidden=!open;textureTrigger.setAttribute('aria-expanded',String(open));if(open)textureOptions.querySelector('[aria-selected="true"]')?.focus();};
+let textureCloseTimer;
+function closeTexturePicker(){textureTrigger.setAttribute('aria-expanded','false');if(textureOptions.hidden)return;textureOptions.classList.add('is-closing');clearTimeout(textureCloseTimer);textureCloseTimer=setTimeout(()=>{textureOptions.hidden=true;textureOptions.classList.remove('is-closing');},150);}
+textureTrigger.onclick=()=>{const open=textureOptions.hidden;clearTimeout(textureCloseTimer);textureOptions.classList.remove('is-closing');textureOptions.hidden=!open;textureTrigger.setAttribute('aria-expanded',String(open));if(open)textureOptions.querySelector('[aria-selected="true"]')?.focus();};
 document.addEventListener('pointerdown',event=>{if(!texturePicker.contains(event.target))closeTexturePicker();});
 texturePicker.addEventListener('keydown',event=>{if(event.key==='Escape'){closeTexturePicker();textureTrigger.focus();return;}if(event.key==='ArrowDown'&&textureOptions.hidden){event.preventDefault();textureTrigger.click();}});
 function ensureViewer() {
-  if(!viewerPromise) viewerPromise=import('./viewer.js').then(async ({ ModelViewer })=>{ const instance=new ModelViewer(document.querySelector('#scene'),document.querySelector('#viewport'),updateTime); await instance.load(); refreshTexturePicker(instance); renderRoamingToggles(instance); setTimeout(()=>refreshCoverAnimation(instance),50); return instance; });
+  if(!viewerPromise) viewerPromise=import('./viewer.js').then(async ({ ModelViewer })=>{ const instance=new ModelViewer(document.querySelector('#scene'),document.querySelector('#viewport'),updateTime); await instance.load(); refreshTexturePicker(instance); setTimeout(()=>refreshCoverAnimation(instance),50); return instance; });
   return viewerPromise;
-}
-function collectAnimations(value,output=[]){if(typeof value==='string')output.push(value);else if(Array.isArray(value))value.forEach(item=>collectAnimations(item,output));else if(value&&typeof value==='object')Object.values(value).forEach(item=>collectAnimations(item,output));return output;}
-function applyRoamingPanelPosition(host){
-  if(!host.classList.contains('user-positioned'))return;
-  try{const position=JSON.parse(getStored('ysm-roaming-panel-position')||'null'),parent=host.parentElement;if(!position||!parent)return;const maxX=Math.max(0,parent.clientWidth-host.offsetWidth),maxY=Math.max(0,parent.clientHeight-host.offsetHeight);host.style.left=`${Math.min(1,Math.max(0,position.x))*maxX}px`;host.style.top=`${Math.min(1,Math.max(0,position.y))*maxY}px`;host.style.right='auto';}catch{}
-}
-function enableRoamingPanelDrag(host,handle){
-  if(host.dataset.dragReady)return;host.dataset.dragReady='true';
-  handle.addEventListener('pointerdown',event=>{
-    if(event.button!==0)return;event.preventDefault();const parent=host.parentElement,parentRect=parent.getBoundingClientRect(),rect=host.getBoundingClientRect();
-    host.classList.add('user-positioned');host.style.left=`${rect.left-parentRect.left}px`;host.style.top=`${rect.top-parentRect.top}px`;host.style.right='auto';handle.setPointerCapture(event.pointerId);
-    const move=pointer=>{if(pointer.pointerId!==event.pointerId)return;const maxX=Math.max(0,parent.clientWidth-host.offsetWidth),maxY=Math.max(0,parent.clientHeight-host.offsetHeight),x=Math.min(maxX,Math.max(0,rect.left-parentRect.left+pointer.clientX-event.clientX)),y=Math.min(maxY,Math.max(0,rect.top-parentRect.top+pointer.clientY-event.clientY));host.style.left=`${x}px`;host.style.top=`${y}px`;};
-    const finish=pointer=>{if(pointer.pointerId!==event.pointerId)return;handle.removeEventListener('pointermove',move);handle.removeEventListener('pointerup',finish);handle.removeEventListener('pointercancel',finish);const maxX=Math.max(1,parent.clientWidth-host.offsetWidth),maxY=Math.max(1,parent.clientHeight-host.offsetHeight),position={x:parseFloat(host.style.left)/maxX,y:parseFloat(host.style.top)/maxY};store('ysm-roaming-panel-position',JSON.stringify(position));};
-    handle.addEventListener('pointermove',move);handle.addEventListener('pointerup',finish);handle.addEventListener('pointercancel',finish);
-  });
-  window.addEventListener('resize',()=>applyRoamingPanelPosition(host));
-}
-function renderRoamingToggles(instance){
-  const host=document.querySelector('#roaming-toggles'),items=new Map();
-  for(const [animationId,labelValue] of Object.entries(instance?.customAnimationSlots||{})){
-    const animation=instance.animations?.[animationId];if(!animation?.timeline)continue;
-    const label=wheelText(typeof labelValue==='string'?labelValue:animationId)||animationId;
-    for(const statement of collectAnimations(animation.timeline)){
-      for(const match of statement.matchAll(/\b(?:v|variable)\.roaming\.([\w$]+)\s*=\s*!\s*(?:v|variable)\.roaming\.\1\b/g))if(!items.has(match[1]))items.set(match[1],label);
-    }
-  }
-  host.replaceChildren();host.hidden=!items.size;if(!items.size)return;
-  const title=document.createElement('span');title.className='roaming-toggles-title roaming-toggles-drag-handle';title.textContent='部件显示';host.append(title);enableRoamingPanelDrag(host,title);applyRoamingPanelPosition(host);
-  for(const [variable,label] of items){
-    const control=document.createElement('label');control.className='roaming-toggle';
-    const input=document.createElement('input');input.type='checkbox';input.checked=Boolean(instance.getMolangValue(`v.roaming.${variable}`));input.setAttribute('aria-label',`${label}显示`);
-    input.onchange=()=>instance.setMolangVariable(`v.roaming.${variable}`,input.checked?1:0);
-    const text=document.createElement('span');text.textContent=label;control.append(input,text);host.append(control);
-  }
 }
 function toast(message) { const el = document.querySelector('#toast'); el.textContent = message; el.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(()=>el.hidden=true, 3000); }
 function getStored(key) { try { return localStorage.getItem(key); } catch { return null; } }
@@ -212,8 +189,7 @@ document.querySelector('#model-folder').onchange=async (event)=>{
   const files=[...event.target.files]; const byPath=new Map(files.map(file=>[file.webkitRelativePath.split('/').slice(1).join('/'),file]));
   const modelFile=byPath.get('models/main.json'); const textureEntries=[...byPath.entries()].filter(([path])=>/^textures\/.*\.(png|jpg|jpeg|webp)$/i.test(path)).map(([path,file])=>({id:path,path,label:path.split('/').pop().replace(/\.[^.]+$/,''),file}));
   if(!modelFile||!textureEntries.length){toast('文件夹中需要 models/main.json 和 textures 贴图');event.target.value='';return;}
-  const animationFile=byPath.get('animations/main.animation.json'),extraAnimationFile=byPath.get('animations/extra.animation.json');
-  try { if(!viewerPromise) await selectTab('preview'); viewer=await viewerPromise; viewer.setActive(false); const metadataFile=byPath.get('ysm.json'),metadata=metadataFile?JSON.parse(await metadataFile.text()):{}; const avatarFiles=new Map([...byPath].filter(([path])=>path.toLowerCase().startsWith('avatar/')).map(([path,file])=>[path.toLowerCase(),file])); await viewer.loadFiles({model:modelFile,textures:textureEntries,texture:textureEntries[0]?.file,animation:animationFile,extraAnimation:extraAnimationFile,metadata:metadataFile}); refreshTexturePicker(viewer); renderRoamingToggles(viewer); renderModelMetadata(metadata,avatarFiles,true); viewer.setActive(true); document.querySelector('#loading-state').hidden=true; refreshCoverAnimation(viewer); toast('模型文件夹导入成功'); }
+  try { if(!viewerPromise) await selectTab('preview'); viewer=await viewerPromise; viewer.setActive(false); const metadataFile=byPath.get('ysm.json'),metadata=metadataFile?JSON.parse(await metadataFile.text()):{},getPackageFile=path=>byPath.get(String(path||'').replaceAll('\\','/').replace(/^\.\//,'')); let animationFiles=Object.entries(metadata.files?.player?.animation||{}).map(([id,path])=>({id,path,file:getPackageFile(path)})).filter(entry=>entry.file); if(!animationFiles.length)animationFiles=[...byPath.entries()].filter(([path])=>/^animations\/.*\.json$/i.test(path)).map(([path,file])=>({id:path.split('/').pop().replace(/\.animation\.json$/i,''),path,file})); let controllerFiles=(metadata.files?.player?.animation_controllers||[]).map(path=>({path,file:getPackageFile(path)})).filter(entry=>entry.file); if(!controllerFiles.length)controllerFiles=[...byPath.entries()].filter(([path])=>/^controller\/.*\.json$/i.test(path)).map(([path,file])=>({path,file})); const avatarFiles=new Map([...byPath].filter(([path])=>path.toLowerCase().startsWith('avatar/')).map(([path,file])=>[path.toLowerCase(),file])); await viewer.loadFiles({model:modelFile,textures:textureEntries,texture:textureEntries[0]?.file,animationFiles,controllerFiles,metadata:metadataFile}); refreshTexturePicker(viewer); renderModelMetadata(metadata,avatarFiles,true); viewer.setActive(true); document.querySelector('#loading-state').hidden=true; refreshCoverAnimation(viewer); toast('模型文件夹导入成功'); }
   catch(error){console.error(error);toast(`导入失败：${error.message}`);}
   event.target.value='';
 };
@@ -271,38 +247,55 @@ const findAnimation=kind=>{
   const patterns={idle:[/(?:^|[._-])idle(?:$|[._-])/i,/待机|站立/]};
   return names.find(name=>patterns[kind]?.some(pattern=>pattern.test(name)));
 };
-function activateAnimation(name,label){if(!name){toast(`当前模型没有${label}动画`);return false;}viewer.setAnimation(name);document.querySelector('#animation-name').textContent=label;document.querySelectorAll('[data-animation]').forEach(button=>button.classList.toggle('selected',button.dataset.animation===name));syncPlay();return true;}
+function activateAnimation(name,label){if(!name){toast(`当前模型没有${label}动画`);return false;}viewer.setAnimation(name);document.querySelector('#animation-name').textContent=label;document.querySelectorAll('[data-animation]').forEach(button=>button.classList.toggle('selected',button.dataset.animation===name));document.querySelectorAll('#pose-walk,#pose-run,#pose-jump').forEach(button=>button.classList.toggle('active',button.id===`pose-${label==='走'?'walk':label==='跑'?'run':label==='跳'?'jump':''}`));syncPlay();return true;}
 let actionWheelPage=0,actionWheelPath=[],actionWheelSettings=null;
-const wheelText=value=>String(value??'').replace(/§[0-9a-fk-or]/gi,'').trim();
+const wheelText=value=>minecraftTextRuns(value).map(run=>run.text).join('').trim();
 const wheelEscape=value=>String(value??'').replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;').replaceAll('>','&gt;');
 function getWheelEntries(){
-  if(actionWheelPath.length){const group=viewer.customAnimationGroups.find(item=>String(item.id)===actionWheelPath.at(-1));return Object.entries(group?.extra_animation||{}).map(([id,label])=>({id,label:wheelText(label)||wheelText(id)}));}
-  return Object.entries(viewer?.customAnimationSlots||{}).map(([id,label])=>({id,label:wheelText(label)||wheelText(id)}));
+  if(actionWheelPath.length){const group=viewer.customAnimationGroups.find(item=>String(item.id)===actionWheelPath.at(-1));return Object.entries(group?.extra_animation||{}).map(([id,label])=>({id,label:wheelText(label)?String(label):id}));}
+  return Object.entries(viewer?.customAnimationSlots||{}).map(([id,label])=>({id,label:wheelText(label)?String(label):id}));
 }
 function getWheelGroup(id){const key=String(id).replace(/^#/,'');return viewer?.customAnimationGroups?.find(group=>String(group.id)===key);}
 function getWheelForm(id){const key=wheelText(id).replace(/^#/,'');return viewer?.customAnimationButtons?.find(button=>String(button.id)===key);}
 function renderWheelSettings(form){
   const wheel=document.querySelector('#action-wheel'),forms=Array.isArray(form?.config_forms)?form.config_forms:[];
   actionWheelSettings=form;const fields=forms.map((field,index)=>{
-    const title=wheelEscape(wheelText(field.title)||`设置 ${index+1}`),description=wheelEscape(wheelText(field.description)),path=wheelEscape(field.value||'');
+    const plainTitle=wheelEscape(wheelText(field.title)||`设置 ${index+1}`),title=minecraftTextHtml(wheelText(field.title)?field.title:`设置 ${index+1}`),description=minecraftTextHtml(field.description||''),path=wheelEscape(field.value||'');
     if(field.type==='range'){
       const min=Number(field.min??0),max=Number(field.max??1),step=Number(field.step??0.01),current=Number(viewer.getMolangValue(path));
       const value=Number.isFinite(current)&&current>=min&&current<=max?current:min;
       const fill=max>min?Math.max(0,Math.min(100,(value-min)/(max-min)*100)):0;
-      return `<label class="wheel-setting range-setting"><span>${title}</span><output>${value}</output><input type="range" min="${min}" max="${max}" step="${step}" value="${value}" style="--range-fill:${fill}%" data-wheel-value="${path}" aria-label="${title}">${description?`<small>${description}</small>`:''}</label>`;
+      return `<label class="wheel-setting range-setting"><span>${title}</span><output class="range-value-current">${value}</output><div class="material-slider" style="--range-fill:${fill}%;--thumb-position:${fill}%"><div class="material-slider-track"><span class="material-slider-inactive"></span><span class="material-slider-active"></span></div><input class="material-slider-input" type="range" min="${min}" max="${max}" step="${step}" value="${value}" data-wheel-value="${path}" aria-label="${plainTitle}"><div class="material-slider-thumb"><div class="range-value-indicator-container"><output class="range-value-bubble" aria-hidden="true"><span class="range-value-bubble-text">${value}</span></output></div><span class="material-slider-thumb-knob"></span></div></div>${description?`<small>${description}</small>`:''}</label>`;
     }
-    if(field.type==='checkbox')return `<label class="wheel-setting check-setting"><input type="checkbox" data-wheel-value="${path}" aria-label="${title}" ${Number(viewer.getMolangValue(path))?'checked':''}><span>${title}</span>${description?`<small>${description}</small>`:''}</label>`;
+    if(field.type==='checkbox')return `<label class="wheel-setting check-setting"><input type="checkbox" data-wheel-value="${path}" aria-label="${plainTitle}" ${Number(viewer.getMolangValue(path))?'checked':''}><span>${title}</span>${description?`<small>${description}</small>`:''}</label>`;
     if(field.type==='radio'){
       const options=Object.entries(field.labels||{}),selected=options.find(([,expr])=>Number(viewer.getMolangValue(String(expr).split('=')[0]))===Number(String(expr).split('=').at(-1)))?.[0];
-      return `<fieldset class="wheel-setting radio-setting"><legend>${title}</legend><div>${options.map(([label,expr],i)=>`<label><input type="radio" name="wheel-radio-${index}" data-wheel-expression="${wheelEscape(expr)}" ${label===selected||(!selected&&i===0)?'checked':''}><span>${wheelEscape(wheelText(label))}</span></label>`).join('')}</div>${description?`<small>${description}</small>`:''}</fieldset>`;
+      return `<fieldset class="wheel-setting radio-setting"><legend>${title}</legend><div>${options.map(([label,expr],i)=>`<label><input type="radio" name="wheel-radio-${index}" data-wheel-expression="${wheelEscape(expr)}" ${label===selected||(!selected&&i===0)?'checked':''}><span>${minecraftTextHtml(label)}</span></label>`).join('')}</div>${description?`<small>${description}</small>`:''}</fieldset>`;
     }
     return '';
   }).join('');
-  wheel.innerHTML=`<section class="wheel-settings" aria-label="${wheelEscape(wheelText(form?.name||form?.id))}"><header><strong>${wheelEscape(wheelText(form?.name||form?.id))}</strong><button type="button" data-wheel-settings-close aria-label="关闭设置">${icon('x')}</button></header><div class="wheel-settings-fields">${fields||'<p>此选项没有可调节的设置</p>'}</div></section>`;
+  wheel.innerHTML=`<section class="wheel-settings" aria-label="${wheelEscape(wheelText(form?.name||form?.id))}"><header><strong>${minecraftTextHtml(form?.name||form?.id)}</strong><button type="button" data-wheel-settings-close aria-label="关闭设置">${icon('x')}</button></header><div class="wheel-settings-fields">${fields||'<p>此选项没有可调节的设置</p>'}</div></section>`;
   wheel.querySelector('[data-wheel-settings-close]').onclick=()=>{actionWheelSettings=null;renderActionWheel();};
-  wheel.querySelectorAll('[data-wheel-value]').forEach(input=>input.addEventListener('input',()=>{const value=input.type==='checkbox'?(input.checked?1:0):Number(input.value);if(input.type==='range')input.style.setProperty('--range-fill',`${(value-Number(input.min))/(Number(input.max)-Number(input.min))*100}%`);if(viewer.setMolangVariable(input.dataset.wheelValue,value))input.closest('.range-setting')?.querySelector('output').replaceChildren(String(value));}));
+  wheel.querySelectorAll('[data-wheel-value]').forEach(input=>{
+    if(input.type==='range'){
+      const slider=input.closest('.material-slider');
+      input.addEventListener('pointerdown',()=>slider.classList.add('is-adjusting'));
+      input.addEventListener('focus',()=>slider.classList.add('is-adjusting'));
+      input.addEventListener('blur',()=>slider.classList.remove('is-adjusting'));
+      input.addEventListener('pointerup',()=>setTimeout(()=>slider.classList.remove('is-adjusting'),450));
+      const syncSlider=()=>{const ratio=(Number(input.value)-Number(input.min))/(Number(input.max)-Number(input.min)||1);slider.style.setProperty('--range-fill',`${ratio*100}%`);slider.style.setProperty('--thumb-position',`${4+ratio*Math.max(0,slider.clientWidth-8)}px`);slider.querySelector('.range-value-bubble-text').textContent=input.value;};
+      syncSlider();input.addEventListener('input',syncSlider);
+    }
+    input.addEventListener('input',()=>{const value=input.type==='checkbox'?(input.checked?1:0):Number(input.value);if(viewer.setMolangVariable(input.dataset.wheelValue,value)){const current=input.closest('.range-setting')?.querySelector('.range-value-current');if(current)current.textContent=String(value);}});
+  });
   wheel.querySelectorAll('[data-wheel-expression]').forEach(input=>input.addEventListener('change',()=>{if(input.checked)viewer.setMolangVariable(input.dataset.wheelExpression,0);}));
   refreshIcons();
+}
+function fitActionWheelControls(){
+  const controls=document.querySelector('#action-wheel .action-wheel-controls'),breadcrumbs=controls?.querySelector('.wheel-breadcrumbs');if(!controls||!breadcrumbs||controls.closest('[hidden]'))return;
+  const style=getComputedStyle(controls),children=[...controls.children],gaps=(Number.parseFloat(style.gap)||0)*Math.max(0,children.length-1),fixed=children.filter(child=>child!==breadcrumbs).reduce((width,child)=>width+child.getBoundingClientRect().width,0)+gaps+(Number.parseFloat(style.paddingLeft)||0)+(Number.parseFloat(style.paddingRight)||0)+2;
+  const available=Math.max(0,window.innerWidth-20),pathWidth=Math.min(breadcrumbs.scrollWidth,Math.max(0,available-fixed));
+  breadcrumbs.style.maxWidth=`${pathWidth}px`;controls.style.width=`${Math.min(available,fixed+pathWidth)}px`;
 }
 function renderActionWheel(){
   const wheel=document.querySelector('#action-wheel');if(actionWheelSettings){renderWheelSettings(actionWheelSettings);return;}
@@ -312,21 +305,29 @@ function renderActionWheel(){
     const start=-Math.PI/2-Math.PI/8+index*Math.PI/4,end=start+Math.PI/4,[ix,iy]=polar(36,start),[ox,oy]=polar(110.4,start),[ex,ey]=polar(110.4,end),[fx,fy]=polar(36,end),[tx,ty]=polar(82.8,(start+end)/2),[gx,gy]=polar(48,(start+end)/2),entry=pageEntries[index];
     const d=`M ${ix} ${iy} L ${ox} ${oy} A 110.4 110.4 0 0 1 ${ex} ${ey} L ${fx} ${fy} A 36 36 0 0 0 ${ix} ${iy} Z`;
     if(!entry)return `<g class="wheel-sector-empty"><path d="${d}"/></g>`;
-    const displayLabel=wheelText(entry.label).replace(/^#/,'')||entry.id,label=wheelEscape(displayLabel),form=getWheelForm(entry.label),group=getWheelGroup(entry.id),animation=viewer.animations?.[entry.id]?entry.id:(viewer.animations?.[entry.label]?entry.label:'');
+    const styledLabel=stripWheelMarker(entry.label),displayLabel=wheelText(styledLabel).replace(/^#/,'')||entry.id,label=wheelEscape(displayLabel),form=getWheelForm(entry.label),group=getWheelGroup(entry.id),animation=viewer.animations?.[entry.id]?entry.id:(viewer.animations?.[displayLabel]?displayLabel:'');
     const isFolder=!!group||entry.id.startsWith('#'),hint=isFolder?'进入子目录':animation?`播放 ${displayLabel}`:'打开设置';
     if(form)gearButtons.push(`<button type="button" class="wheel-sector-gear-button" data-wheel-settings="${wheelEscape(form.id)}" style="left:${gx/240*100}%;top:${gy/240*100}%" aria-label="${label} 设置" title="${label} 设置">⚙</button>`);
-    return `<g class="wheel-sector${isFolder?' wheel-sector-folder':''}" role="menuitem" tabindex="0" data-wheel-entry="${wheelEscape(entry.id)}" aria-label="${label}，${wheelEscape(hint)}"><title>${label} · ${wheelEscape(hint)}</title><path d="${d}"/><text x="${tx}" y="${ty+3}" text-anchor="middle">${label}</text></g>`;
+    const isPlaying=animation&&viewer.animationName===animation;
+    return `<g class="wheel-sector${isFolder?' wheel-sector-folder':''}${isPlaying?' is-playing':''}" role="menuitem" tabindex="0" data-wheel-entry="${wheelEscape(entry.id)}" aria-label="${label}，${wheelEscape(hint)}"${isPlaying?' aria-current="true"':''}><title>${label} · ${wheelEscape(hint)}</title><path d="${d}"/><text x="${tx}" y="${ty+3}" text-anchor="middle">${minecraftTextSvg(styledLabel)}</text></g>`;
   }).join('');
-  const controls=pageCount>1||actionWheelPath.length?`<div class="action-wheel-controls">${actionWheelPath.length?`<button type="button" id="wheel-back" aria-label="返回上一级">${icon('undo')}</button>`:''}<span class="wheel-path">${actionWheelPath.length?`路径：${wheelText(actionWheelPath.at(-1))} · `:'路径：根目录 · '}</span><button type="button" id="wheel-prev" aria-label="上一页" ${actionWheelPage===0?'disabled':''}>${icon('chevron-left')}</button><span>${actionWheelPage+1} / ${pageCount}</span><button type="button" id="wheel-next" aria-label="下一页" ${actionWheelPage>=pageCount-1?'disabled':''}>${icon('chevron-right')}</button></div>`:'';
+  const breadcrumbs=[{id:'',label:'根目录'},...actionWheelPath.map(id=>{const group=viewer.customAnimationGroups.find(item=>String(item.id)===String(id));return{id:String(id),label:group?.name||id};})];
+  const breadcrumbMarkup=breadcrumbs.map((crumb,index)=>{
+    const label=wheelText(crumb.label)||String(crumb.id||'根目录'),isCurrent=index===breadcrumbs.length-1;
+    const content=minecraftTextHtml(crumb.label||label),aria=wheelEscape(label);
+    return `${index?'<span class="wheel-crumb-separator" aria-hidden="true">/</span>':''}${isCurrent?`<span class="wheel-crumb is-current" aria-current="location" aria-label="${aria}">${content}</span>`:`<button type="button" class="wheel-crumb" data-wheel-depth="${index-1}" aria-label="返回${aria}">${content}</button>`}`;
+  }).join('');
+  const controls=pageCount>1||actionWheelPath.length?`<div class="action-wheel-controls"><nav class="wheel-breadcrumbs" aria-label="动作轮盘路径">${breadcrumbMarkup}</nav><button type="button" id="wheel-prev" aria-label="上一页" ${actionWheelPage===0?'disabled':''}>${icon('chevron-left')}</button><span class="wheel-page-indicator">${actionWheelPage+1} / ${pageCount}</span><button type="button" id="wheel-next" aria-label="下一页" ${actionWheelPage>=pageCount-1?'disabled':''}>${icon('chevron-right')}</button></div>`:'';
   const empty=entries.length?'':`<div class="action-wheel-empty">没有可用的额外动作</div>`;
   wheel.innerHTML=`${controls}<svg class="action-wheel-svg" viewBox="0 0 240 240" role="menu" aria-label="额外动作">${sectors}</svg>${gearButtons.join('')}${empty}`;
+  fitActionWheelControls();
   refreshIcons();
   wheel.querySelectorAll('[data-wheel-entry]').forEach(item=>{
-    const activate=()=>{const id=item.dataset.wheelEntry,entry=entries.find(value=>value.id===id),group=getWheelGroup(id);if(group){actionWheelPath.push(String(group.id));actionWheelPage=0;renderActionWheel();return;}const animation=viewer.animations?.[id]?id:(viewer.animations?.[entry?.label]?entry.label:'');if(animation){activateAnimation(animation,entry?.label||animation);renderRoamingToggles(viewer);closeActionWheel();return;}const form=getWheelForm(entry?.label);if(form)renderWheelSettings(form);};
+    const activate=()=>{const id=item.dataset.wheelEntry,entry=entries.find(value=>value.id===id),group=getWheelGroup(id);if(group){actionWheelPath.push(String(group.id));actionWheelPage=0;renderActionWheel();return;}const entryLabel=wheelText(stripWheelMarker(entry?.label)),animation=viewer.animations?.[id]?id:(viewer.animations?.[entryLabel]?entryLabel:'');if(animation){activateAnimation(animation,entryLabel||animation);renderActionWheel();return;}const form=getWheelForm(entry?.label);if(form)renderWheelSettings(form);};
     item.onclick=()=>activate();item.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();activate();}};
   });
   wheel.querySelectorAll('[data-wheel-settings]').forEach(item=>{const open=event=>{event.stopPropagation();const form=getWheelForm(item.dataset.wheelSettings);if(form)renderWheelSettings(form);};item.onclick=open;item.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open(event);}};});
-  wheel.querySelector('#wheel-back')?.addEventListener('click',()=>{actionWheelPath.pop();actionWheelPage=0;renderActionWheel();});
+  wheel.querySelectorAll('[data-wheel-depth]').forEach(item=>item.addEventListener('click',()=>{const depth=Number(item.dataset.wheelDepth);actionWheelPath=depth<0?[]:actionWheelPath.slice(0,depth+1);actionWheelPage=0;renderActionWheel();}));
   wheel.querySelector('#wheel-prev')?.addEventListener('click',()=>{actionWheelPage--;renderActionWheel();});
   wheel.querySelector('#wheel-next')?.addEventListener('click',()=>{actionWheelPage++;renderActionWheel();});
   document.querySelector('#action-wheel-close').onclick=closeActionWheel;
@@ -336,7 +337,8 @@ function positionWheelClose(){const toolbar=document.querySelector('.viewer-tool
 document.querySelector('#pose-walk').onclick=()=>needViewer()&&activateAnimation(findAnimation('walk'),'走');
 document.querySelector('#pose-run').onclick=()=>needViewer()&&activateAnimation(findAnimation('run'),'跑');
 document.querySelector('#pose-jump').onclick=()=>needViewer()&&activateAnimation(findAnimation('jump'),'跳');
-document.querySelector('#action-wheel-button').onclick=()=>{if(!needViewer())return;const wheel=document.querySelector('#action-wheel');if(!wheel.hidden){closeActionWheel();return;}renderActionWheel();wheel.hidden=false;document.querySelector('#action-wheel-button').setAttribute('aria-expanded','true');positionWheelClose();document.querySelector('#action-wheel-close').hidden=false;};
+document.querySelector('#action-wheel-button').onclick=()=>{if(!needViewer())return;const wheel=document.querySelector('#action-wheel');if(!wheel.hidden){closeActionWheel();return;}renderActionWheel();wheel.hidden=false;fitActionWheelControls();document.querySelector('#action-wheel-button').setAttribute('aria-expanded','true');positionWheelClose();document.querySelector('#action-wheel-close').hidden=false;};
+window.addEventListener('resize',fitActionWheelControls);
 document.querySelector('#center-view-button').onclick=()=>{if(!needViewer())return;viewer.reset();document.querySelectorAll('[data-view]').forEach(button=>button.classList.toggle('selected',button.dataset.view==='front'));};
 document.querySelector('#reset-pose-button').onclick=()=>{if(!needViewer())return;const idle=findAnimation('idle');if(idle)activateAnimation(idle,'待机');else{viewer.time=0;viewer.applyFrame();viewer.onTime(viewer.time,viewer.duration);}};
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!document.querySelector('#action-wheel').hidden){closeActionWheel();document.querySelector('#action-wheel-button').focus();}});
@@ -347,7 +349,7 @@ document.querySelector('#play-button').onclick=()=>{if(needViewer()){viewer.play
 document.querySelector('#timeline').oninput=e=>{if(needViewer()){viewer.seek(Number(e.target.value));syncPlay();}};
 document.querySelector('#speed').onchange=e=>{if(needViewer())viewer.speed=Number(e.target.value);};
 document.querySelector('#fullscreen-button').onclick=async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.querySelector('#viewer-shell').requestFullscreen();}catch{toast('当前浏览器不支持全屏预览');}};
-document.addEventListener('fullscreenchange',()=>{const b=document.querySelector('#fullscreen-button');const label=document.fullscreenElement?'退出全屏':'全屏';b.innerHTML=icon(document.fullscreenElement?'minimize':'maximize');b.setAttribute('aria-label',label);b.title=label;refreshIcons();});
+document.addEventListener('fullscreenchange',()=>{const b=document.querySelector('#fullscreen-button');const label=document.fullscreenElement?'退出全屏':'全屏';b.innerHTML=materialIcon(document.fullscreenElement?'fullscreen_exit':'fullscreen');b.setAttribute('aria-label',label);b.title=label;refreshIcons();});
 window.addEventListener('resize',()=>{if(!document.querySelector('#action-wheel').hidden)positionWheelClose();});
 window.addEventListener('resize',()=>{clearTimeout(coverResizeTimer);coverResizeTimer=setTimeout(()=>{if(viewer)refreshCoverAnimation(viewer,false);},180);},{passive:true});
 if(location.hash==='#preview')selectTab('preview');else ensureViewer().catch(error=>console.warn('Local model preview could not be initialized:',error));
