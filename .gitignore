@@ -1,0 +1,28 @@
+# Dependencies and build output
+node_modules/
+/dist/
+/.vite/
+/coverage/
+*.tsbuildinfo
+
+# Local reference files and experiments
+/.ref/
+/_codex-*/
+
+# Local configuration (keep shareable examples)
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.local
+
+# Logs and editor / OS files
+*.log
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
