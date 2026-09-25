@@ -33,6 +33,22 @@ async function loadLegacyTexture(url) {
   return {texture,hasTranslucency};
 }
 
+async function loadCardLayer(file,fallbackFile,declaredPath,id,baseUrl){
+  const path=String(declaredPath||'').replaceAll('\\','/').replace(/^\/+/, '');
+  if(!path)return null;
+  const candidates=[file?{file}:null,baseUrl?{url:`${baseUrl}${path.split('/').map(encodeURIComponent).join('/')}`}:null,fallbackFile?{file:fallbackFile}:null,...(baseUrl&&path!==`background/${id}.png`?[{url:`${baseUrl}background/${id}.png`}]:[])].filter(Boolean);
+  for(const candidate of candidates){
+    let objectUrl;
+    try{
+      if(candidate.file)objectUrl=URL.createObjectURL(candidate.file);
+      else {const response=await fetch(candidate.url);if(!response.ok)continue;objectUrl=URL.createObjectURL(await response.blob());}
+      const image=new Image();image.src=objectUrl;await image.decode();
+      return {url:objectUrl,image,owned:true};
+    }catch(error){if(objectUrl)URL.revokeObjectURL(objectUrl);console.warn(`Could not load ${id}:`,error);}
+  }
+  return null;
+}
+
 export class ModelViewer {
   constructor(canvas, viewport, onTime) {
     this.canvas=canvas; this.viewport=viewport; this.onTime=onTime;
@@ -74,7 +90,16 @@ export class ModelViewer {
   async load() {
     const source=this.fileMap;
     this.time=0;this.elapsedTime=0;
-    const metadata=source?.metadata?await source.metadata.text().then(JSON.parse):await loadJson(`${DEFAULT_MODEL_BASE}ysm.json`).catch(()=>({}));
+    const metadata=source?(source.metadata?await source.metadata.text().then(JSON.parse):{}):await loadJson(`${DEFAULT_MODEL_BASE}ysm.json`).catch(()=>({}));
+    const props=metadata.properties||metadata.metadata?.properties||{};
+    this.releaseCardLayers();
+    const cardLayers=await Promise.all([
+      loadCardLayer(source?.cardBackground,source?.cardBackgroundFallback,props.gui_background,'gui_background',source?null:DEFAULT_MODEL_BASE),
+      loadCardLayer(source?.cardForeground,source?.cardForegroundFallback,props.gui_foreground,'gui_foreground',source?null:DEFAULT_MODEL_BASE),
+    ]);
+    this.cardLayerObjectUrls=cardLayers.filter(Boolean).map(layer=>layer.url);
+    this.cardBackgroundUrl=cardLayers[0]?.url||null;this.cardForegroundUrl=cardLayers[1]?.url||null;
+    this.cardBackgroundImage=cardLayers[0]?.image||null;this.cardForegroundImage=cardLayers[1]?.image||null;
     const declaredAnimations=metadata.files?.player?.animation||{};
     const declaredAnimationEntries=Object.entries(declaredAnimations).map(([id,path])=>({id,path}));
     const animationEntries=source?.animationFiles?.length?source.animationFiles:source?[...(source.animation?[{id:'main',file:source.animation}]:[]),...(source.extraAnimation?[{id:'extra',file:source.extraAnimation}]:[])]:declaredAnimationEntries.length?declaredAnimationEntries:[{id:'main',path:'animations/main.animation.json'},{id:'extra',path:'animations/extra.animation.json'}];
@@ -130,7 +155,6 @@ export class ModelViewer {
     this.bindAnimationContext(this.animationContext);
     // YSM's folder schema places properties at the document root. Also accept
     // older metadata-wrapped exports so plugin options are not silently lost.
-    const props=metadata.properties||metadata.metadata?.properties||{};
     this.customAnimationSlots=props.extra_animation&&typeof props.extra_animation==='object'?props.extra_animation:{};
     this.customAnimationGroups=Array.isArray(props.extra_animation_classify)?props.extra_animation_classify:[];
     this.customAnimationButtons=Array.isArray(props.extra_animation_buttons)?props.extra_animation_buttons:[];
@@ -140,13 +164,9 @@ export class ModelViewer {
     this.extraAnimationNames=new Set([...slotNames].filter(name=>Object.hasOwn(this.animations,name)));
     this.previewAnimationName=typeof props.preview_animation==='string'?props.preview_animation.trim():'';
     this.disablePreviewRotation=isYsmFlagEnabled(props.disable_preview_rotation??props.disablePreviewRotation);
-    const previewPose=previewCardPose(this.disablePreviewRotation);
-    const previewTilt=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0),THREE.MathUtils.degToRad(previewPose.pitch));
-    const previewYawRotation=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0),THREE.MathUtils.degToRad(previewPose.yawOffset));
-    this.root.quaternion.copy(previewTilt).multiply(previewYawRotation);
-    const previewClip=this.animations[this.previewAnimationName];
-    const previewRoot=this.skeleton.bones.find((bone,index)=>this.skeleton.parent[index]<0&&previewClip?.bones?.[bone.name]?.rotation!==undefined);
-    this.previewRootRotationClip=previewRoot?{bones:{[previewRoot.name]:{rotation:previewClip.bones[previewRoot.name].rotation}}}:null;
+    // Keep the interactive viewer straight-on. Model-card yaw/pitch and its
+    // preview animation are applied only while rendering the generated cover.
+    this.root.quaternion.identity();
     const widthScale=Number.isFinite(Number(props.width_scale))?Number(props.width_scale):0.7;
     const heightScale=Number.isFinite(Number(props.height_scale))?Number(props.height_scale):0.7;
     // IGeoRenderer applies height_scale to X/Z and width_scale to Y.
@@ -166,9 +186,15 @@ export class ModelViewer {
     if(this.root){ this.scene.remove(this.root); this.root.traverse(node=>node.geometry?.dispose()); this.root.userData.boneTexture?.dispose(); this.root=null; }
     this.material?.dispose();this.translucentMaterial?.dispose();
     for(const entry of this.textureVariants||[]){entry.texture.dispose();entry.texture.image?.close?.();}
+    this.releaseCardLayers();
     this.textureVariants=[];this.material=null;this.translucentMaterial=null;
     this.fileMap=fileMap;
     await this.load();
+  }
+
+  releaseCardLayers(){
+    for(const url of this.cardLayerObjectUrls||[])URL.revokeObjectURL(url);
+    this.cardLayerObjectUrls=[];this.cardBackgroundUrl=null;this.cardForegroundUrl=null;this.cardBackgroundImage=null;this.cardForegroundImage=null;
   }
 
   get duration() { return this.animations?.[this.animationName]?.animation_length || 1; }
@@ -199,14 +225,14 @@ export class ModelViewer {
     // preview surface.
     this.controls.reset();this.controls.target.set(0,1.28,0);
     const distance=Math.max(6.8,4.5/Math.max(this.camera.aspect,0.6));
-    this.camera.position.set(0,1.65,-distance);
+    this.camera.position.set(0,1.28,-distance);
     this.controls.update();
   }
   setView(view) {
     const distance=this.camera.position.distanceTo(this.controls.target);
     const center=this.controls.target;
     if(view==='side')this.camera.position.set(center.x+distance,center.y,center.z);
-    else this.camera.position.set(center.x,center.y+0.25,center.z+(view==='back'?distance:-distance));
+    else this.camera.position.set(center.x,center.y,center.z+(view==='back'?distance:-distance));
     this.controls.update();
   }
   setAnimation(name) { if(!this.animations[name])return;this.animationName=name;this.time=0;this.playing=true;this.applyFrame(); }
@@ -234,11 +260,11 @@ export class ModelViewer {
     target[path.at(-1)]=inlineValue?Number(inlineValue[1]):value;
     this.applyFrame();this.renderer.render(this.scene,this.camera);return true;
   }
-  async generateCoverApng({width=300,height=400,fps=25}={}) {
+  async generateCoverApng({width=300,height=400,fullCardHeight=null,fps=60,includeCardChrome=false,title=''}={}) {
     const animationName=this.previewAnimationName&&this.animations?.[this.previewAnimationName]?this.previewAnimationName:null;
     if(!animationName)return null;
     const animation=this.animations[animationName];
-    const duration=Math.max(.1,Number(animation?.animation_length)||1),count=Math.max(2,Math.min(150,Math.ceil(duration*fps)));
+    const duration=Math.max(.1,Number(animation?.animation_length)||1),count=Math.max(2,Math.ceil(duration*fps));
     const saved={time:this.time,elapsedTime:this.elapsedTime,animationName:this.animationName,playing:this.playing,active:this.active,animationPlayer:this.animationPlayer,animationContext:this.animationContext,controllerCurrent:new Map(this.controllerRuntime?.current||[]),controllerEntered:new Set(this.controllerRuntime?.entered||[]),rotation:this.root.rotation.clone(),position:this.root.position.clone(),scale:this.root.scale.clone(),rootPose:this.rootPose.clone(),visibility:this.root.userData.getBoneVisibility(),grid:this.grid.visible};
     this.setActive(false);this.playing=false;this.animationName=animationName;this.animationPlayer=new YsmAnimationPlayer(this.skeleton);this.animationContext=createYsmAnimationContext();this.bindAnimationContext(this.animationContext);this.grid.visible=false;
     // Match ModelPreviewRenderer.renderLivingEntityPreview and ModelButton:
@@ -259,6 +285,7 @@ export class ModelViewer {
     // root.position is in GUI render units; only the canvas projection uses
     // outputPerGuiPixel. Multiplying here moves the model out of the frame.
     this.root.position.set(0,guiHeight/2-previewBaseline,0);
+    const cardHeight=includeCardChrome?Math.max(height,Number(fullCardHeight)||Math.round(height*9/7)):height;
     const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
     const renderer=new THREE.WebGLRenderer({canvas,alpha:true,antialias:false,preserveDrawingBuffer:true});renderer.setPixelRatio(1);renderer.setSize(width,height,false);renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.setClearColor(0x000000,0);
     // This is a fixed GUI-scale orthographic view, not a perspective camera
@@ -269,14 +296,35 @@ export class ModelViewer {
     // Bedrock's model front faces -Z; the GUI renderer's Z flip is handled
     // here by viewing the unmirrored model from its front side.
     camera.position.set(0,0,-1000);camera.lookAt(0,0,0);camera.updateProjectionMatrix();
-    const surface=document.createElement('canvas');surface.width=width;surface.height=height;const ctx=surface.getContext('2d',{willReadFrequently:true});const frames=[];
+    const surface=document.createElement('canvas');surface.width=width;surface.height=cardHeight;const ctx=surface.getContext('2d',{willReadFrequently:true});ctx.imageSmoothingEnabled=false;const frames=[];
     try{
       // Sampling the animation twice keeps the camera stable for the whole
       // loop, rather than fitting only its first pose.
       this.animationPlayer=new YsmAnimationPlayer(this.skeleton);this.animationContext=createYsmAnimationContext();
       this.controllerRuntime?.reset();
-      for(let i=0;i<count;i++){if(i>0)advanceYsmPhysics(this.animationContext,1/fps);this.elapsedTime=i/fps;this.time=i/count*duration;this.applyFrame();renderer.render(this.scene,camera);ctx.clearRect(0,0,width,height);ctx.drawImage(canvas,0,0,width,height);frames.push(ctx.getImageData(0,0,width,height));}
-      return await encodeApng(frames,width,height,1000/fps);
+      // Match model-card playback's ~60 Hz physics/timeline cadence and APNG
+      // output cadence so every simulated pose is represented in the file.
+      const simulationStep=1/60;let simulationTime=0;
+      for(let i=0;i<count;i++){
+        const frameTime=Math.min(i/fps,duration);
+        if(i===0){this.elapsedTime=0;this.time=0;this.applyFrame(true);}
+        else{
+          while(simulationTime+simulationStep<=frameTime+1e-8){
+            simulationTime+=simulationStep;
+            this.elapsedTime=simulationTime;this.time=simulationTime%duration;
+            advanceYsmPhysics(this.animationContext,simulationStep);
+            this.applyFrame(true);
+          }
+          // Evaluate the pose at the exact APNG timestamp without replaying
+          // stateful timeline/controller scripts between simulation ticks.
+          this.elapsedTime=frameTime;this.time=frameTime%duration;this.applyFrame(false);
+        }
+        renderer.render(this.scene,camera);ctx.clearRect(0,0,width,cardHeight);
+        if(includeCardChrome){if(this.cardBackgroundImage)ctx.drawImage(this.cardBackgroundImage,0,0,width,cardHeight);ctx.drawImage(canvas,0,0,width,height);if(this.cardForegroundImage)ctx.drawImage(this.cardForegroundImage,0,0,width,cardHeight);drawCardTitle(ctx,title,width,height,cardHeight);}
+        else ctx.drawImage(canvas,0,0,width,height);
+        frames.push(ctx.getImageData(0,0,width,cardHeight));
+      }
+      return await encodeApng(frames,width,cardHeight,1000/fps);
     } finally {
       renderer.dispose();
       for(let i=0;i<saved.visibility.length;i++)if(saved.visibility[i])this.root.userData.setBoneVisible(this.root.userData.skeletonBones[i].name,true);
@@ -300,7 +348,7 @@ export class ModelViewer {
     }
     this.frame=requestAnimationFrame(this.tick);
   }
-  applyFrame() {
+  applyFrame(advanceTimeline=true) {
     if(!this.skeleton||!this.root)return;
     // Keep the game's player layers in order: pre-parallel, pre-main,
     // selected state animation, post-main, then parallel overlays.
@@ -309,9 +357,9 @@ export class ModelViewer {
     context.time=this.time;context.lifeTime=this.elapsedTime;context.query.anim_time=this.time;context.query.life_time=this.elapsedTime;
     context.ctrl.playing_extra_animation=this.extraAnimationNames?.has(this.animationName)?1:0;
     for(const name of ['idle','walk','run','jump'])context.ctrl[name]=this.animationName===name?1:0;
-    this.controllerRuntime?.update(context,evaluateMolang,executeMolangStatements);
+    if(advanceTimeline)this.controllerRuntime?.update(context,evaluateMolang,executeMolangStatements);
     const active=this.controllerRuntime?.activeAnimations(context,evaluateMolang)||[];
-    const applyEntries=(entries,time)=>{context.query.anim_time=time;for(const {name} of entries){const clip=this.animations?.[name];if(clip)this.animationPlayer.apply(clip,time,context);}};
+    const applyEntries=(entries,time)=>{context.query.anim_time=time;for(const {name} of entries){const clip=this.animations?.[name];if(clip)this.animationPlayer.apply(clip,time,context,advanceTimeline);}};
     const applySlot=(slot,fallbackPrefix=null)=>{
       const matcher=new RegExp(`^player\\.${slot}(?:_|$)`),controllers=[...this.controllerRuntime.controllers.keys()].filter(name=>matcher.test(name));
       const entries=active.filter(entry=>controllers.includes(entry.controller));
@@ -320,24 +368,25 @@ export class ModelViewer {
     };
     applySlot('pre_parallel','pre_parallel');
     applySlot('pre_main');
-    const main=this.animations?.[this.animationName];if(main)this.animationPlayer.apply(main,this.time,context);
+    const main=this.animations?.[this.animationName];if(main)this.animationPlayer.apply(main,this.time,context,advanceTimeline);
     applySlot('post_main');
     applySlot('parallel','parallel');
-    // Carry the authored model-card root angle into the interactive viewer,
-    // while leaving its preview-only translation, scale, and motion out.
-    if(this.previewRootRotationClip&&this.animationName!==this.previewAnimationName)this.animationPlayer.apply(this.previewRootRotationClip,0,context);
     const matrices=this.skeleton.computeMatrices(this.rootPose);
     this.root.userData.setAnimationBoneVisibility(this.skeleton.visible);
     this.root.userData.updateBoneTexture(matrices,this.skeleton.normalMatrices);
   }
-  screenshot() {
-    this.renderer.render(this.scene,this.camera);
-    const a=document.createElement('a');a.download=`堤雅-${this.animationName}.png`;a.href=this.canvas.toDataURL('image/png');a.click();
+  screenshot(filename='ysm-preview') {
+    const gridVisible=this.grid.visible;let image;
+    try{this.grid.visible=false;this.renderer.render(this.scene,this.camera);image=this.canvas.toDataURL('image/png');}
+    finally{this.grid.visible=gridVisible;this.renderer.render(this.scene,this.camera);}
+    const safeName=String(filename||'ysm-preview').replace(/[\\/:*?"<>|]/g,'_').slice(0,100)||'ysm-preview';
+    const link=document.createElement('a');link.download=`${safeName}.png`;link.href=image;link.click();
   }
   dispose() {
     this.setActive(false);this.resizeObserver.disconnect();this.canvas.removeEventListener('wheel',this.onWheel);this.controls.dispose();
     this.root?.traverse(o=>o.geometry?.dispose());this.root?.userData.boneTexture?.dispose();this.material?.dispose();this.translucentMaterial?.dispose();
     for(const entry of this.textureVariants||[]){entry.texture.dispose();entry.texture.image?.close?.();}
+    this.releaseCardLayers();
     this.grid.geometry.dispose();this.grid.material.dispose();this.renderer.dispose();
   }
 }
@@ -372,12 +421,41 @@ transformed=(ysmBoneMatrix*vec4(transformed,1.0)).xyz;`);
   material.customProgramCacheKey=()=>`${previousCacheKey()}|ysm-gpu-skin-v1`;
 }
 
-// Mirror the two ModelPreviewRenderer branches used by YSM's model picker.
+// Mirror the two ModelPreviewRenderer angle branches used by YSM's model picker.
 // With disable_preview_rotation enabled, the model faces straight forward and
-// the source renderer adds its 5.5 GUI-unit vertical offset; the authored
-// preview animation still runs in either branch.
+// the source renderer adds its 5.5 GUI-unit vertical offset.
 function previewCardPose(disableRotation){
-  return disableRotation?{yawOffset:0,pitch:0,baseline:70.5}:{yawOffset:-20,pitch:10,baseline:65};
+  return disableRotation?{yawOffset:0,pitch:0,baseline:70.5}:{yawOffset:-20,pitch:-10,baseline:65};
+}
+
+function drawCardTitle(ctx,value,width,previewHeight,cardHeight){
+  const colors={0:'#000000',1:'#0000aa',2:'#00aa00',3:'#00aaaa',4:'#aa0000',5:'#aa00aa',6:'#ffaa00',7:'#aaaaaa',8:'#555555',9:'#5555ff',a:'#55ff55',b:'#55ffff',c:'#ff5555',d:'#ff55ff',e:'#ffff55',f:'#ffffff'};
+  const runs=[];let style={color:'#f4edf4',bold:false,italic:false},buffer='';
+  const flush=()=>{if(buffer){runs.push({text:buffer,...style});buffer='';}};
+  const text=String(value??'');
+  for(let i=0;i<text.length;i++){
+    if(text[i]!=='§'||i+1>=text.length){buffer+=text[i];continue;}
+    const hex=/^§x(?:§[0-9a-f]){6}/i.exec(text.slice(i));
+    if(hex){flush();style={...style,color:'#'+[...hex[0].matchAll(/§([0-9a-f])/gi)].map(match=>match[1]).join(''),bold:false,italic:false};i+=hex[0].length-1;continue;}
+    const code=text[i+1].toLowerCase();if(!/[0-9a-fk-or]/.test(code)){buffer+=text[i];continue;}flush();i++;
+    if(colors[code])style={color:colors[code],bold:false,italic:false};else if(code==='r')style={color:'#f4edf4',bold:false,italic:false};else if(code==='l')style={...style,bold:true};else if(code==='o')style={...style,italic:true};
+  }
+  flush();
+  const scale=width/300,size=22*scale,lineHeight=28*scale,maxWidth=width-28*scale,lines=[[]];
+  const setFont=run=>{ctx.font=`${run.italic?'italic ':''}${run.bold?'700':'600'} ${size}px "Segoe UI", "Microsoft YaHei", sans-serif`;};
+  for(const run of runs)for(const char of run.text){
+    if(char==='\n'){lines.push([]);continue;}
+    setFont(run);const current=lines.at(-1),lineWidth=current.reduce((sum,item)=>{setFont(item);return sum+ctx.measureText(item.text).width;},0);
+    if(current.length&&lineWidth+ctx.measureText(char).width>maxWidth)lines.push([]);
+    lines.at(-1).push({...run,text:char});
+  }
+  const visibleLines=lines.slice(0,Math.max(1,Math.floor((cardHeight-previewHeight-12*scale)/(24*scale)))),footerHeight=cardHeight-previewHeight,startY=previewHeight+(footerHeight-visibleLines.length*lineHeight)/2+size;
+  ctx.save();ctx.textBaseline='alphabetic';ctx.shadowColor='#000b';ctx.shadowBlur=3;ctx.shadowOffsetY=1;
+  visibleLines.forEach((line,index)=>{
+    const lineWidth=line.reduce((sum,run)=>{setFont(run);return sum+ctx.measureText(run.text).width;},0);let x=(width-lineWidth)/2,y=startY+index*lineHeight;
+    for(const run of line){setFont(run);ctx.fillStyle=run.color;ctx.fillText(run.text,x,y);x+=ctx.measureText(run.text).width;}
+  });
+  ctx.restore();
 }
 
 function extendCoverBounds(bounds,geometry,matrix){

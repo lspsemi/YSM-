@@ -15,6 +15,19 @@ export class YsmSkeleton {
       this.pivots.set(p,i*3); this.rest.set(r,i*3);
       this.parent[i]=b.parentIdx ?? (b.parent&&this.index.has(b.parent)?this.index.get(b.parent):-1);
     }
+    // OpenYSM resolves a bone's parent recursively before composing its local
+    // transform. Preserve that behavior even when a child appears earlier in
+    // the geometry array than its parent.
+    const visited=new Uint8Array(this.count),order=[];
+    const visit=i=>{
+      if(visited[i]===2)return;
+      if(visited[i]===1)return;
+      visited[i]=1;
+      const parent=this.parent[i];if(parent>=0)visit(parent);
+      visited[i]=2;order.push(i);
+    };
+    for(let i=0;i<this.count;i++)visit(i);
+    this.boneOrder=order;
     this.params=new Float32Array(this.count*9);
     this.matrices=new Float32Array(this.count*16);
     this.normalMatrices=new Float32Array(this.count*9);
@@ -27,7 +40,7 @@ export class YsmSkeleton {
   computeMatrices(rootPose=new THREE.Matrix4()){
     const out=this.matrices;
     const matrix4=new THREE.Matrix4(),normalMatrix=new THREE.Matrix3();
-    for(let s=0;s<this.count;s++){
+    for(const s of this.boneOrder){
       const o=s*16, pa=this.parent[s];
       if(pa<0) out.set(rootPose.elements,o); else out.copyWithin(o,pa*16,pa*16+16);
       const q=s*9,n=this.params, piv=this.pivots;

@@ -44,4 +44,13 @@ function pngChunk(type,data){
 function crc32(data){let crc=0xffffffff;for(const byte of data)crc=CRC_TABLE[(crc^byte)&255]^(crc>>>8);return (crc^0xffffffff)>>>0;}
 function write16(data,offset,value){data[offset]=(value>>>8)&255;data[offset+1]=value&255;}
 function write32(data,offset,value){data[offset]=(value>>>24)&255;data[offset+1]=(value>>>16)&255;data[offset+2]=(value>>>8)&255;data[offset+3]=value&255;}
-function fraction(value){let numerator=Math.max(1,Math.round(value*1000)),denominator=1000;while(numerator>65535){numerator=Math.round(numerator/2);denominator=Math.round(denominator/2);}let a=numerator,b=denominator;while(b){[a,b]=[b,a%b];}return [numerator/a,denominator/a];}
+function fraction(value){
+  let x=value,h0=0,h1=1,k0=1,k1=0;
+  for(let i=0;i<32;i++){
+    const a=Math.floor(x),h=a*h1+h0,k=a*k1+k0;
+    if(h>65535||k>65535)break;
+    if(Math.abs(h/k-value)<1e-10||Math.abs(x-a)<1e-12)return[Math.max(1,h),Math.max(1,k)];
+    h0=h1;h1=h;k0=k1;k1=k;x=1/(x-a);
+  }
+  return[Math.max(1,h1),Math.max(1,k1)];
+}

@@ -100,12 +100,12 @@ function executeTimeline(animation,time,ctx,states){
 // sampled channel into the shared skeleton parameter buffer.
 export class YsmAnimationPlayer {
   constructor(skeleton){this.skeleton=skeleton;this.timelineStates=new WeakMap();}
-  apply(animation,time,context=createYsmAnimationContext()){
+  apply(animation,time,context=createYsmAnimationContext(),advanceTimeline=true){
     if(!animation)return;
     const length=Number(animation.animation_length)||0,loops=animation.loop===true||animation.loop==='true';
     const t=length?(loops?((time%length)+length)%length:Math.min(Math.max(time,0),length)):time;
     context.time=t;context.query.anim_time=t;context.query.life_time=context.lifeTime??time;
-    executeTimeline(animation,time,context,this.timelineStates);
+    if(advanceTimeline)executeTimeline(animation,time,context,this.timelineStates);
     const params=this.skeleton.params,index=this.skeleton.index,rest=this.skeleton.rest;
     for(const [name,channels] of Object.entries(animation.bones||{})){
       const id=index.get(name);if(id===undefined)continue;
