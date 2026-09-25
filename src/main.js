@@ -168,6 +168,21 @@ function ensureViewer() {
   return viewerPromise;
 }
 function collectAnimations(value,output=[]){if(typeof value==='string')output.push(value);else if(Array.isArray(value))value.forEach(item=>collectAnimations(item,output));else if(value&&typeof value==='object')Object.values(value).forEach(item=>collectAnimations(item,output));return output;}
+function applyRoamingPanelPosition(host){
+  if(!host.classList.contains('user-positioned'))return;
+  try{const position=JSON.parse(getStored('ysm-roaming-panel-position')||'null'),parent=host.parentElement;if(!position||!parent)return;const maxX=Math.max(0,parent.clientWidth-host.offsetWidth),maxY=Math.max(0,parent.clientHeight-host.offsetHeight);host.style.left=`${Math.min(1,Math.max(0,position.x))*maxX}px`;host.style.top=`${Math.min(1,Math.max(0,position.y))*maxY}px`;host.style.right='auto';}catch{}
+}
+function enableRoamingPanelDrag(host,handle){
+  if(host.dataset.dragReady)return;host.dataset.dragReady='true';
+  handle.addEventListener('pointerdown',event=>{
+    if(event.button!==0)return;event.preventDefault();const parent=host.parentElement,parentRect=parent.getBoundingClientRect(),rect=host.getBoundingClientRect();
+    host.classList.add('user-positioned');host.style.left=`${rect.left-parentRect.left}px`;host.style.top=`${rect.top-parentRect.top}px`;host.style.right='auto';handle.setPointerCapture(event.pointerId);
+    const move=pointer=>{if(pointer.pointerId!==event.pointerId)return;const maxX=Math.max(0,parent.clientWidth-host.offsetWidth),maxY=Math.max(0,parent.clientHeight-host.offsetHeight),x=Math.min(maxX,Math.max(0,rect.left-parentRect.left+pointer.clientX-event.clientX)),y=Math.min(maxY,Math.max(0,rect.top-parentRect.top+pointer.clientY-event.clientY));host.style.left=`${x}px`;host.style.top=`${y}px`;};
+    const finish=pointer=>{if(pointer.pointerId!==event.pointerId)return;handle.removeEventListener('pointermove',move);handle.removeEventListener('pointerup',finish);handle.removeEventListener('pointercancel',finish);const maxX=Math.max(1,parent.clientWidth-host.offsetWidth),maxY=Math.max(1,parent.clientHeight-host.offsetHeight),position={x:parseFloat(host.style.left)/maxX,y:parseFloat(host.style.top)/maxY};store('ysm-roaming-panel-position',JSON.stringify(position));};
+    handle.addEventListener('pointermove',move);handle.addEventListener('pointerup',finish);handle.addEventListener('pointercancel',finish);
+  });
+  window.addEventListener('resize',()=>applyRoamingPanelPosition(host));
+}
 function renderRoamingToggles(instance){
   const host=document.querySelector('#roaming-toggles'),items=new Map();
   for(const [animationId,labelValue] of Object.entries(instance?.customAnimationSlots||{})){
@@ -178,7 +193,7 @@ function renderRoamingToggles(instance){
     }
   }
   host.replaceChildren();host.hidden=!items.size;if(!items.size)return;
-  const title=document.createElement('span');title.className='roaming-toggles-title';title.textContent='部件显示';host.append(title);
+  const title=document.createElement('span');title.className='roaming-toggles-title roaming-toggles-drag-handle';title.textContent='部件显示';host.append(title);enableRoamingPanelDrag(host,title);applyRoamingPanelPosition(host);
   for(const [variable,label] of items){
     const control=document.createElement('label');control.className='roaming-toggle';
     const input=document.createElement('input');input.type='checkbox';input.checked=Boolean(instance.getMolangValue(`v.roaming.${variable}`));input.setAttribute('aria-label',`${label}显示`);
