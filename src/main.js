@@ -1,7 +1,6 @@
 import { createIcons, Box, Boxes, BookOpen, Users, Moon, Sun, ArrowLeft, ArrowUpRight, Download, ShoppingBag, Check, Info, Scan, Circle, MessageSquare, Archive, RotateCcw, Maximize, Minimize, Grid2X2, Camera, RotateCw, Play, Pause, PersonStanding, Footprints, MoveUp, ChevronLeft, ChevronRight, ChevronDown, Link, Heart, ShieldCheck, MousePointer2, X, Eye, Sparkles, FileBox, Upload } from 'lucide';
 import './style.css';
 import { DEFAULT_MODEL_BASE, DEFAULT_MODEL_PAGE, DEFAULT_MODEL_DOWNLOAD } from './model-config.js';
-import { unzip } from 'fflate';
 
 const icons = { Box, Boxes, BookOpen, Users, Moon, Sun, ArrowLeft, ArrowUpRight, Download, ShoppingBag, Check, Info, Scan, Circle, MessageSquare, Archive, RotateCcw, Maximize, Minimize, Grid2X2, Camera, RotateCw, Play, Pause, PersonStanding, Footprints, MoveUp, ChevronLeft, ChevronRight, ChevronDown, Link, Heart, ShieldCheck, MousePointer2, X, Eye, Sparkles, FileBox, Upload };
 const icon = name => `<i data-lucide="${name}"></i>`;
@@ -42,7 +41,7 @@ document.querySelector('#app').innerHTML = `
     <div class="model-layout">
       <aside class="model-sidebar">
         <div class="cover-card"><img class="cover-layer cover-background" alt="" aria-hidden="true" hidden><div class="cover-wrap"><img class="cover" alt="游戏内人物卡预览" hidden><span class="cover-badge">${icon('box')} YSM MODEL</span><button class="cover-preview" id="cover-preview">${icon('scan')} 查看 3D 预览 ${icon('arrow-up-right')}</button></div><img class="cover-layer cover-foreground" alt="" aria-hidden="true" hidden><h2 class="cover-caption"><span id="cover-title"></span></h2></div>
-        <div class="cover-actions"><button class="button secondary save-card-button" id="save-card-button" type="button" disabled>${icon('download')} 保存动态人物卡</button><button class="button secondary unload-model" id="unload-model" type="button" disabled>${icon('x')} 卸载模型</button></div>
+        <div class="cover-actions"><div class="card-duration-setting"><label class="card-force-toggle" for="card-force-duration"><input id="card-force-duration" type="checkbox"><span>强制最大秒数</span></label><label class="card-duration-slider" for="card-duration"><span>人物卡动画时长</span><output id="card-duration-value" for="card-duration">5 秒</output><input id="card-duration" type="range" min="0.1" max="30" step="0.1" value="5" aria-label="人物卡动画时长"></label></div><div class="card-playback-setting"><button class="button secondary" id="card-playback-toggle" type="button" aria-pressed="false" disabled>${icon('pause')} 暂停</button><label for="card-frame-time"><span>当前帧</span><output id="card-frame-time-value" for="card-frame-time">0.00 秒</output><input id="card-frame-time" type="range" min="0" max="5" step="0.01" value="0" aria-label="人物卡当前帧"></label></div><button class="button secondary save-card-button" id="save-card-button" type="button" disabled>${icon('download')} 保存动态人物卡</button><button class="button secondary unload-model" id="unload-model" type="button" disabled>${icon('x')} 卸载模型</button></div>
         <div class="download-actions"><a class="button primary" href="${DEFAULT_MODEL_DOWNLOAD}?format=ysm" target="_blank" rel="noopener noreferrer">${icon('download')} 下载模型 <span>.ysm</span></a><button class="button secondary" id="collect-button">${icon('shopping-bag')} 加入收藏袋</button><a class="zip-link" href="${DEFAULT_MODEL_DOWNLOAD}?format=zip" target="_blank" rel="noopener noreferrer">下载 ZIP 文件 ${icon('arrow-up-right')}</a></div>
         <div class="sidebar-meta"><span>模型版本</span><strong>1.0 <span class="tiny-dot"></span><em>当前版本</em></strong><span>适用模组</span><strong>Yes Steve Model</strong><span>模型授权</span><strong>CC0 公共领域 ${icon('shield-check')}</strong></div>
         <p class="sidebar-note">${icon('info')} 模型及作者信息来自 All the YSM</p>
@@ -75,6 +74,14 @@ function refreshIcons() { createIcons({ icons, attrs: { 'stroke-width': 1.7 } })
 refreshIcons();
 refreshIcons();
 let viewer, viewerPromise, toastTimer, toastExitTimer, dragDepth=0, coverAnimationUrl,coverPixelSize='',coverResizeTimer,coverGenerationQueue=Promise.resolve(),activeModelName='§b[§d§l香奈美§b]§f-§e重制';
+const MAX_CARD_DURATION=30;
+const DEFAULT_CARD_DURATION=5;
+let cardPlaybackPaused=false,cardFrameTime=0,cardFrameTimer;
+function cardDuration(){return Number(document.querySelector('#card-duration')?.value)||DEFAULT_CARD_DURATION;}
+function forceCardDuration(){return document.querySelector('#card-force-duration')?.checked===true;}
+function syncCardPlaybackUi(){const button=document.querySelector('#card-playback-toggle'),save=document.querySelector('#save-card-button');if(button){button.innerHTML=`${icon(cardPlaybackPaused?'play':'pause')} ${cardPlaybackPaused?'开始':'暂停'}`;button.setAttribute('aria-pressed',String(cardPlaybackPaused));}if(save&&viewer?.root)save.innerHTML=`${icon('download')} 保存${cardPlaybackPaused?'静态':'动态'}人物卡`;refreshIcons();}
+function updateCardFrameSlider(){const input=document.querySelector('#card-frame-time'),duration=cardDuration();input.max=String(duration);cardFrameTime=Math.min(duration,Math.max(0,cardFrameTime));input.value=String(cardFrameTime);document.querySelector('#card-frame-time-value').value=`${cardFrameTime.toFixed(2)} 秒`;}
+function resetCardDuration(duration=DEFAULT_CARD_DURATION){const input=document.querySelector('#card-duration'),value=Math.min(MAX_CARD_DURATION,Math.max(Number(input.min)||0.1,Number(duration)||DEFAULT_CARD_DURATION));input.value=String(value);document.querySelector('#card-duration-value').value=`${value} 秒`;updateCardFrameSlider();}
 let avatarObjectUrls=[];
 const safeExternalUrl=value=>{try{const url=new URL(value);return ['http:','https:'].includes(url.protocol)?url.href:'';}catch{return '';}};
 function renderMinecraftText(target,value){
@@ -165,6 +172,7 @@ function showEmptyModel(){
   document.title='YSM 预览器';
   document.querySelector('#author-count').textContent='等待导入模型';
   document.querySelector('#save-card-button').disabled=true;
+  document.querySelector('#card-playback-toggle').disabled=true;document.querySelector('#card-force-duration').checked=false;document.querySelector('#card-duration').disabled=false;cardPlaybackPaused=false;cardFrameTime=0;clearTimeout(cardFrameTimer);resetCardDuration();syncCardPlaybackUi();
   document.querySelector('#author-grid').innerHTML='<p class="author-empty">请通过右上角按钮导入模型文件夹或 ZIP 压缩包。</p>';
   const cover=document.querySelector('.cover');cover.hidden=true;cover.removeAttribute('src');
   for(const layer of document.querySelectorAll('.cover-layer')){layer.hidden=true;layer.removeAttribute('src');}
@@ -199,20 +207,20 @@ document.querySelector('#unload-model').onclick=async()=>{
 };
 document.querySelector('#save-card-button').onclick=async event=>{
   const button=event.currentTarget,instance=viewer;if(!instance?.root||button.disabled)return;
-  button.disabled=true;button.textContent='正在生成 60 fps 动态卡片…';
+  button.disabled=true;button.textContent=cardPlaybackPaused?'正在生成静态卡片…':'正在生成 60 fps 动态卡片…';
   try{
     const exportTask=coverGenerationQueue.catch(()=>{}).then(async()=>{
       if(instance!==viewer)throw new Error('模型已卸载');
       const previewBounds=document.querySelector('.cover-wrap').getBoundingClientRect(),cardBounds=document.querySelector('.cover-card').getBoundingClientRect(),pixelRatio=window.devicePixelRatio||1;
       const width=Math.max(1,Math.round(previewBounds.width*pixelRatio)),height=Math.max(1,Math.round(previewBounds.height*pixelRatio)),fullCardHeight=Math.max(height,Math.round(cardBounds.height*pixelRatio));
-      const blob=await instance.generateCoverApng({width,height,fullCardHeight,fps:60,includeCardChrome:true,title:activeModelName});
+      const blob=await instance.generateCoverApng({width,height,fullCardHeight,fps:60,duration:cardDuration(),forceDuration:forceCardDuration(),startTime:cardFrameTime,staticFrame:cardPlaybackPaused,includeCardChrome:true,title:activeModelName});
       if(!blob)throw new Error('该模型没有可用的人物卡预览动画');
       const url=URL.createObjectURL(blob),link=document.createElement('a'),safeName=wheelText(activeModelName).replace(/[\\/:*?"<>|]/g,'_').trim()||'ysm-card';
-      link.href=url;link.download=`${safeName}.png`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('动态人物卡已保存（APNG · 60 fps）');
+      link.href=url;link.download=`${safeName}.png`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);toast(cardPlaybackPaused?'静态人物卡已保存（PNG）':'动态人物卡已保存（APNG · 60 fps）');
     });
     coverGenerationQueue=exportTask.then(()=>undefined,()=>undefined);await exportTask;
   }catch(error){console.error('Could not export animated model card:',error);toast(`保存失败：${error.message}`);}
-  finally{button.disabled=!viewer?.previewAnimationName||!viewer.animations?.[viewer.previewAnimationName];button.innerHTML=`${icon('download')} 保存动态人物卡`;refreshIcons();}
+  finally{button.disabled=!viewer?.previewAnimationName||!viewer.animations?.[viewer.previewAnimationName];syncCardPlaybackUi();}
 };
 function refreshCoverAnimation(instance,force=true) {
   coverGenerationQueue=coverGenerationQueue.catch(()=>{}).then(()=>generateCoverAnimation(instance,force));
@@ -224,10 +232,8 @@ async function generateCoverAnimation(instance,force) {
   const bounds=cover.closest('.cover-wrap').getBoundingClientRect(),pixelRatio=window.devicePixelRatio||1;
   const width=Math.max(1,Math.round(bounds.width*pixelRatio)),height=Math.max(1,Math.round(bounds.height*pixelRatio)),pixelSize=`${width}x${height}`;
   if(!force&&pixelSize===coverPixelSize)return;
-  cover.hidden=true;cover.removeAttribute('src');
-  if(coverAnimationUrl){URL.revokeObjectURL(coverAnimationUrl);coverAnimationUrl=null;}
-  const task=instance.generateCoverApng({width,height});instance.coverAnimationPromise=task;
-  try { const blob=await task;if(!blob||instance!==viewer)return;const url=URL.createObjectURL(blob);cover.src=url;cover.hidden=false;coverAnimationUrl=url; }
+  const task=instance.generateCoverApng({width,height,duration:cardDuration(),forceDuration:forceCardDuration(),startTime:cardFrameTime,staticFrame:cardPlaybackPaused});instance.coverAnimationPromise=task;
+  try { const blob=await task;if(!blob||instance!==viewer)return;const url=URL.createObjectURL(blob),previousUrl=coverAnimationUrl;cover.src=url;cover.hidden=false;coverAnimationUrl=url;if(previousUrl)URL.revokeObjectURL(previousUrl); }
   catch(error) { console.warn('Could not generate preview cover APNG:',error); }
   finally { if(instance.coverAnimationPromise===task)instance.coverAnimationPromise=null; }
   if(coverAnimationUrl)coverPixelSize=pixelSize;
@@ -259,31 +265,69 @@ function store(key,value) { try { localStorage.setItem(key,value); } catch { /* 
 function setTheme(dark) { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; const b=document.querySelector('#theme-button'); b.innerHTML=icon(dark?'sun':'moon'); b.setAttribute('aria-label',`切换到${dark?'浅':'深'}色模式`); store('ysm-theme',dark?'dark':'light'); viewer?.setTheme(dark); refreshIcons(); }
 setTheme(getStored('ysm-theme') === 'dark');
 document.querySelector('#theme-button').onclick=()=>setTheme(document.documentElement.dataset.theme!=='dark');
+document.querySelector('#card-duration').addEventListener('input',event=>{
+  const value=Number(event.currentTarget.value);document.querySelector('#card-duration-value').value=`${value.toFixed(1).replace(/\.0$/,'')} 秒`;
+  updateCardFrameSlider();
+  if(viewer)refreshCoverAnimation(viewer);
+});
+document.querySelector('#card-force-duration').addEventListener('change',event=>{
+  document.querySelector('#card-duration').disabled=event.currentTarget.checked;
+  if(viewer)refreshCoverAnimation(viewer);
+});
+document.querySelector('#card-playback-toggle').addEventListener('click',()=>{
+  if(!viewer?.root)return;
+  cardPlaybackPaused=!cardPlaybackPaused;syncCardPlaybackUi();refreshCoverAnimation(viewer);
+});
+document.querySelector('#card-frame-time').addEventListener('input',event=>{
+  cardFrameTime=Number(event.currentTarget.value);cardPlaybackPaused=true;updateCardFrameSlider();syncCardPlaybackUi();
+  clearTimeout(cardFrameTimer);cardFrameTimer=setTimeout(()=>{if(viewer)refreshCoverAnimation(viewer);},140);
+});
 document.querySelector('#import-button').onclick=()=>document.querySelector('#model-folder').click();
 async function loadImportedModel(byPath,sourceName){
   if(modelBusy)return;
-  const modelFile=byPath.get('models/main.json'),textureEntries=[...byPath.entries()].filter(([path])=>/^textures\/.*\.(png|jpg|jpeg|webp)$/i.test(path)).map(([path,file])=>({id:path,path,label:path.split('/').pop().replace(/\.[^.]+$/,''),file}));
-  if(!modelFile||!textureEntries.length)throw new Error('模型包中需要 models/main.json 和 textures 贴图');
+  cardPlaybackPaused=false;cardFrameTime=0;document.querySelector('#card-force-duration').checked=false;document.querySelector('#card-duration').disabled=false;clearTimeout(cardFrameTimer);
+  resetCardDuration();
+  const modelPath=byPath.has('models/main.json')?'models/main.json':byPath.has('main.json')?'main.json':null;
+  const modelFile=modelPath&&byPath.get(modelPath),legacyLayout=modelPath==='main.json';
+  let textureEntries=[...byPath.entries()].filter(([path])=>/^textures\/.*\.(png|jpg|jpeg|webp)$/i.test(path)).map(([path,file])=>({id:path,path,label:path.split('/').pop().replace(/\.[^.]+$/,''),file}));
+  if(legacyLayout&&!textureEntries.length)textureEntries=[...byPath.entries()].filter(([path])=>/\.(png|jpg|jpeg|webp)$/i.test(path)).map(([path,file])=>({id:path,path,label:path.split('/').pop().replace(/\.[^.]+$/,''),file}));
+  if(!modelFile||!textureEntries.length)throw new Error('模型包中需要 models/main.json 和 textures 贴图，或根目录 main.json 与贴图');
   const metadataFile=byPath.get('ysm.json'),metadata=metadataFile?JSON.parse(await metadataFile.text()):{},getPackageFile=path=>byPath.get(String(path||'').replaceAll('\\','/').replace(/^\.\//,''));
+  const importedBedrockModel=legacyLayout?JSON.parse(await modelFile.text())['minecraft:geometry']?.[0]:null;
+  if(legacyLayout&&!importedBedrockModel?.bones)throw new Error('根目录 main.json 中没有 minecraft:geometry 骨骼数据');
+  if(legacyLayout&&!metadata.metadata){
+    const geometry=importedBedrockModel,info=geometry?.description?.ysm_extra_info||{};
+    metadata.metadata={name:info.name||geometry?.description?.identifier||'旧版 YSM 模型',tips:info.tips||'',authors:(info.authors||[]).map(name=>typeof name==='string'?{name}:name),license:{type:info.license||'未提供'}};
+    metadata.properties={preview_animation:'idle'};
+  }
+  const viewerMetadataFile=metadataFile||new File([JSON.stringify(metadata)],'ysm.json',{type:'application/json'});
   let animationFiles=Object.entries(metadata.files?.player?.animation||{}).map(([id,path])=>({id,path,file:getPackageFile(path)})).filter(entry=>entry.file);
-  if(!animationFiles.length)animationFiles=[...byPath.entries()].filter(([path])=>/^animations\/.*\.json$/i.test(path)).map(([path,file])=>({id:path.split('/').pop().replace(/\.animation\.json$/i,''),path,file}));
+  if(metadata.properties?.preview_animation){
+    const previewFile=animationFiles.find(entry=>entry.id==='main')?.file;
+    if(previewFile)animationFiles=animationFiles.filter(entry=>entry.file!==previewFile).concat([{id:'preview-main',path:'preview animation source',file:previewFile}]);
+  }
+  if(!animationFiles.length)animationFiles=[...byPath.entries()].filter(([path])=>legacyLayout?/^[^/]+\.animation\.json$/i.test(path):/^animations\/.*\.json$/i.test(path)).map(([path,file])=>({id:path.split('/').pop().replace(/\.animation\.json$/i,''),path,file}));
   let controllerFiles=(metadata.files?.player?.animation_controllers||[]).map(path=>({path,file:getPackageFile(path)})).filter(entry=>entry.file);
   if(!controllerFiles.length)controllerFiles=[...byPath.entries()].filter(([path])=>/^controller\/.*\.json$/i.test(path)).map(([path,file])=>({path,file}));
   const avatarFiles=new Map([...byPath].filter(([path])=>path.toLowerCase().startsWith('avatar/')).map(([path,file])=>[path.toLowerCase(),file]));
   setModelBusy(true);
   try{
     await releaseViewer();await selectTab('preview');
-    const loading=document.querySelector('#loading-state');loading.innerHTML='<span class="spinner"></span><strong>正在加载模型</strong>';
+    const loading=document.querySelector('#loading-state');loading.innerHTML='<span class="spinner"></span><strong>正在加载模型</strong><span>正在解析模型、贴图与动画…</span>';
     viewer=await ensureViewer();viewer.setTheme(document.documentElement.dataset.theme==='dark');
-    await viewer.loadFiles({model:modelFile,textures:textureEntries,texture:textureEntries[0]?.file,animationFiles,controllerFiles,metadata:metadataFile,cardBackground:getPackageFile(metadata.properties?.gui_background),cardBackgroundFallback:getPackageFile('background/gui_background.png'),cardForeground:getPackageFile(metadata.properties?.gui_foreground),cardForegroundFallback:getPackageFile('background/gui_foreground.png')});
+    await viewer.loadFiles({model:modelFile,textures:textureEntries,texture:textureEntries[0]?.file,animationFiles,controllerFiles,metadata:viewerMetadataFile,bedrockModel:importedBedrockModel,cardBackground:getPackageFile(metadata.properties?.gui_background),cardBackgroundFallback:getPackageFile('background/gui_background.png'),cardForeground:getPackageFile(metadata.properties?.gui_foreground),cardForegroundFallback:getPackageFile('background/gui_foreground.png')});
     for(const [selector,url] of [['.cover-background',viewer.cardBackgroundUrl],['.cover-foreground',viewer.cardForegroundUrl]]){const layer=document.querySelector(selector);if(url){layer.src=url;layer.hidden=false;}else{layer.hidden=true;layer.removeAttribute('src');}}
     document.querySelector('.cover-card').classList.remove('is-empty');
     document.querySelector('#save-card-button').disabled=!viewer.previewAnimationName||!viewer.animations?.[viewer.previewAnimationName];
+    const previewDuration=Number(viewer.animations?.[viewer.previewAnimationName]?.animation_length)||DEFAULT_CARD_DURATION;
+    resetCardDuration(previewDuration);
+    document.querySelector('#card-playback-toggle').disabled=!viewer.previewAnimationName||!viewer.animations?.[viewer.previewAnimationName];syncCardPlaybackUi();
     refreshTexturePicker(viewer);renderModelMetadata(metadata,avatarFiles,true);
     document.querySelector('#scene').hidden=false;
     viewer.setActive(!document.querySelector('#preview-panel').hidden);loading.hidden=true;
     document.querySelector('#render-status').textContent=`已加载 · ${viewer.skeleton?.index?.size||0} 骨骼`;
-    syncPlay();refreshCoverAnimation(viewer);toast(`${sourceName}导入成功`);
+    syncPlay();refreshCoverAnimation(viewer);
+    toast(previewDuration>MAX_CARD_DURATION?`${sourceName}导入成功 · 封面动画时长异常，人物卡预览默认限制为 ${MAX_CARD_DURATION} 秒`:`${sourceName}导入成功`);
   }catch(error){await releaseViewer();throw error;}
   finally{setModelBusy(false);}
 }
@@ -293,9 +337,14 @@ document.querySelector('#model-folder').onchange=async event=>{
 };
 document.querySelector('#zip-import-button').onclick=()=>document.querySelector('#model-zip').click();
 async function importZipArchive(archive){
-  toast('正在读取模型压缩包…');const bytes=new Uint8Array(await archive.arrayBuffer());
-  const extracted=await new Promise((resolve,reject)=>unzip(bytes,(error,files)=>error?reject(error):resolve(files)));
-  let byPath=new Map(Object.entries(extracted).filter(([path])=>!path.endsWith('/')).flatMap(([path,data])=>{
+  toast('正在读取模型压缩包…');const bytes=await archive.arrayBuffer();
+  const worker=new Worker(new URL('./zip-worker.js',import.meta.url),{type:'module'});
+  const entries=await new Promise((resolve,reject)=>{
+    worker.onmessage=event=>{worker.terminate();if(event.data?.error)reject(new Error(event.data.error));else resolve(event.data?.entries||[]);};
+    worker.onerror=event=>{worker.terminate();reject(new Error(event.message||'压缩包解压失败'));};
+    worker.postMessage(bytes,[bytes]);
+  });
+  let byPath=new Map(entries.flatMap(([path,data])=>{
     const normalized=path.replaceAll('\\','/').replace(/^\.\//,'');if(normalized.startsWith('/')||/^[a-z]:/i.test(normalized)||normalized.split('/').includes('..')||normalized.startsWith('__MACOSX/'))return[];
     return[[normalized,new File([data],normalized.split('/').pop()||'package-file')]];
   }));
@@ -303,6 +352,7 @@ async function importZipArchive(archive){
     const candidates=[...byPath.keys()].filter(path=>/(?:^|\/)models\/main\.json$/i.test(path));
     if(candidates.length===1){const prefix=candidates[0].slice(0,-'models/main.json'.length);byPath=new Map([...byPath].flatMap(([path,file])=>path.startsWith(prefix)?[[path.slice(prefix.length),file]]:[]));}
   }
+  await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
   await loadImportedModel(byPath,'模型压缩包');
 }
 document.querySelector('#model-zip').onchange=async event=>{

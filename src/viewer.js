@@ -13,6 +13,17 @@ async function loadJson(url) {
   return response.json();
 }
 
+function parseJsonInWorker(file){
+  if(typeof Worker==='undefined'||typeof URL.createObjectURL!=='function')return file.text().then(JSON.parse);
+  const workerSource='self.onmessage=async e=>{try{const text=await e.data.text();self.postMessage({ok:true,value:JSON.parse(text)})}catch(error){self.postMessage({ok:false,error:error.message})}}';
+  const workerUrl=URL.createObjectURL(new Blob([workerSource],{type:'text/javascript'})),worker=new Worker(workerUrl);
+  return new Promise((resolve,reject)=>{
+    worker.onmessage=event=>{worker.terminate();URL.revokeObjectURL(workerUrl);if(event.data?.ok)resolve(event.data.value);else reject(new Error(event.data?.error||'动画 JSON 解析失败'));};
+    worker.onerror=event=>{worker.terminate();URL.revokeObjectURL(workerUrl);reject(new Error(event.message||'动画 JSON 后台解析失败'));};
+    worker.postMessage(file);
+  });
+}
+
 async function loadLegacyTexture(url) {
   const response=await fetch(url,{cache:'no-store'});
   if(!response.ok) throw new Error(`Failed to load ${url}: ${response.status}`);
@@ -106,7 +117,7 @@ export class ModelViewer {
     const declaredControllerPaths=Array.isArray(metadata.files?.player?.animation_controllers)?metadata.files.player.animation_controllers:[];
     const controllerEntries=source?.controllerFiles?.length?source.controllerFiles:source?[]:declaredControllerPaths.map(path=>({path}));
     const loadEntry=async entry=>{
-      if(entry.file)return entry.file.text().then(JSON.parse);
+      if(entry.file)return parseJsonInWorker(entry.file);
       if(entry.path)return loadJson(`${DEFAULT_MODEL_BASE}${String(entry.path).replaceAll('\\','/').split('/').map(encodeURIComponent).join('/')}`);
       return null;
     };
@@ -145,7 +156,9 @@ export class ModelViewer {
       shader.fragmentShader=shader.fragmentShader.replace('#include <alphatest_fragment>','#include <alphatest_fragment>\n#ifdef USE_ALPHATEST\nif ( diffuseColor.a >= 0.99 ) discard;\n#endif');
     };
     this.translucentMaterial.visible=selected.hasTranslucency;
-    this.root=buildBedrockModel({bedrockModel:model['minecraft:geometry'][0]},[this.material,this.translucentMaterial]);
+    const bedrockGeometry=source?.bedrockModel||model['minecraft:geometry']?.[0];
+    if(!bedrockGeometry?.bones)throw new Error('模型 JSON 中未找到 Bedrock 骨骼数据');
+    this.root=buildBedrockModel({bedrockModel:bedrockGeometry},[this.material,this.translucentMaterial]);
     installGpuSkinning(this.material,this.root.userData.boneTexture);
     installGpuSkinning(this.translucentMaterial,this.root.userData.boneTexture);
     this.bones=this.root.userData.bones; this.animations=animations;
@@ -260,11 +273,16 @@ export class ModelViewer {
     target[path.at(-1)]=inlineValue?Number(inlineValue[1]):value;
     this.applyFrame();this.renderer.render(this.scene,this.camera);return true;
   }
-  async generateCoverApng({width=300,height=400,fullCardHeight=null,fps=60,includeCardChrome=false,title=''}={}) {
+  async generateCoverApng({width=300,height=400,fullCardHeight=null,fps=60,duration=null,forceDuration=false,startTime=0,staticFrame=false,includeCardChrome=false,title=''}={}) {
     const animationName=this.previewAnimationName&&this.animations?.[this.previewAnimationName]?this.previewAnimationName:null;
     if(!animationName)return null;
     const animation=this.animations[animationName];
-    const duration=Math.max(.1,Number(animation?.animation_length)||1),count=Math.max(2,Math.ceil(duration*fps));
+    const animationDuration=Math.max(.1,Number(animation?.animation_length)||1);
+    const requestedDuration=Math.max(.1,Number(duration)||5);
+    const renderDuration=forceDuration?requestedDuration:Math.min(animationDuration,requestedDuration);
+    const requestedStart=Math.max(0,Number(startTime)||0);
+    const frameStart=requestedStart%animationDuration;
+    const count=staticFrame?1:Math.max(2,Math.ceil(renderDuration*fps));
     const saved={time:this.time,elapsedTime:this.elapsedTime,animationName:this.animationName,playing:this.playing,active:this.active,animationPlayer:this.animationPlayer,animationContext:this.animationContext,controllerCurrent:new Map(this.controllerRuntime?.current||[]),controllerEntered:new Set(this.controllerRuntime?.entered||[]),rotation:this.root.rotation.clone(),position:this.root.position.clone(),scale:this.root.scale.clone(),rootPose:this.rootPose.clone(),visibility:this.root.userData.getBoneVisibility(),grid:this.grid.visible};
     this.setActive(false);this.playing=false;this.animationName=animationName;this.animationPlayer=new YsmAnimationPlayer(this.skeleton);this.animationContext=createYsmAnimationContext();this.bindAnimationContext(this.animationContext);this.grid.visible=false;
     // Match ModelPreviewRenderer.renderLivingEntityPreview and ModelButton:
@@ -298,32 +316,38 @@ export class ModelViewer {
     camera.position.set(0,0,-1000);camera.lookAt(0,0,0);camera.updateProjectionMatrix();
     const surface=document.createElement('canvas');surface.width=width;surface.height=cardHeight;const ctx=surface.getContext('2d',{willReadFrequently:true});ctx.imageSmoothingEnabled=false;const frames=[];
     try{
-      // Sampling the animation twice keeps the camera stable for the whole
-      // loop, rather than fitting only its first pose.
+      // Initialize controller timelines and the bone texture before frame 0.
       this.animationPlayer=new YsmAnimationPlayer(this.skeleton);this.animationContext=createYsmAnimationContext();
       this.controllerRuntime?.reset();
+      this.elapsedTime=frameStart;this.time=frameStart%animationDuration;this.applyFrame(true);
+      await renderer.compileAsync(this.scene,camera);
+      renderer.render(this.scene,camera);renderer.getContext().finish();
+      // Sampling the animation twice keeps the camera stable for the whole
+      // loop, rather than fitting only its first pose.
       // Match model-card playback's ~60 Hz physics/timeline cadence and APNG
       // output cadence so every simulated pose is represented in the file.
       const simulationStep=1/60;let simulationTime=0;
       for(let i=0;i<count;i++){
-        const frameTime=Math.min(i/fps,duration);
-        if(i===0){this.elapsedTime=0;this.time=0;this.applyFrame(true);}
-        else{
-          while(simulationTime+simulationStep<=frameTime+1e-8){
-            simulationTime+=simulationStep;
-            this.elapsedTime=simulationTime;this.time=simulationTime%duration;
-            advanceYsmPhysics(this.animationContext,simulationStep);
-            this.applyFrame(true);
-          }
-          // Evaluate the pose at the exact APNG timestamp without replaying
-          // stateful timeline/controller scripts between simulation ticks.
-          this.elapsedTime=frameTime;this.time=frameTime%duration;this.applyFrame(false);
+        const frameTime=Math.min(frameStart+i/fps,frameStart+renderDuration);
+        while(simulationTime+simulationStep<=frameTime+1e-8){
+          simulationTime+=simulationStep;
+          this.elapsedTime=simulationTime;this.time=simulationTime%animationDuration;
+          advanceYsmPhysics(this.animationContext,simulationStep);
+          this.applyFrame(true);
         }
-        renderer.render(this.scene,camera);ctx.clearRect(0,0,width,cardHeight);
+        // Evaluate the pose at the exact output timestamp without replaying
+        // stateful timeline/controller scripts between simulation ticks.
+        this.elapsedTime=frameTime;this.time=frameTime%animationDuration;this.applyFrame(false);
+        renderer.render(this.scene,camera);
+        // drawImage(WebGLCanvas) may otherwise read the preserved buffer while
+        // the GPU is still processing the pose/visibility texture uploads.
+        renderer.getContext().finish();
+        ctx.clearRect(0,0,width,cardHeight);
         if(includeCardChrome){if(this.cardBackgroundImage)ctx.drawImage(this.cardBackgroundImage,0,0,width,cardHeight);ctx.drawImage(canvas,0,0,width,height);if(this.cardForegroundImage)ctx.drawImage(this.cardForegroundImage,0,0,width,cardHeight);drawCardTitle(ctx,title,width,height,cardHeight);}
         else ctx.drawImage(canvas,0,0,width,height);
-        frames.push(ctx.getImageData(0,0,width,cardHeight));
+        if(!staticFrame)frames.push(ctx.getImageData(0,0,width,cardHeight));
       }
+      if(staticFrame)return await new Promise((resolve,reject)=>surface.toBlob(blob=>blob?resolve(blob):reject(new Error('无法生成静态 PNG')), 'image/png'));
       return await encodeApng(frames,width,cardHeight,1000/fps);
     } finally {
       renderer.dispose();
