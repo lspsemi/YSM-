@@ -399,9 +399,15 @@ export class ModelViewer {
     this.root.userData.setAnimationBoneVisibility(this.skeleton.visible);
     this.root.userData.updateBoneTexture(matrices,this.skeleton.normalMatrices);
   }
-  screenshot(filename='ysm-preview') {
+  screenshot(filename='ysm-preview',watermark={}) {
     const gridVisible=this.grid.visible;let image;
-    try{this.grid.visible=false;this.renderer.render(this.scene,this.camera);image=this.canvas.toDataURL('image/png');}
+    try{
+      this.grid.visible=false;this.renderer.render(this.scene,this.camera);
+      if(watermark.enabled&&String(watermark.text||'').trim()){
+        const output=document.createElement('canvas');output.width=this.canvas.width;output.height=this.canvas.height;
+        const context=output.getContext('2d');context.drawImage(this.canvas,0,0);drawTiledWatermark(context,watermark.text,watermark.color,watermark.opacity,output.width,output.height);image=output.toDataURL('image/png');
+      }else image=this.canvas.toDataURL('image/png');
+    }
     finally{this.grid.visible=gridVisible;this.renderer.render(this.scene,this.camera);}
     const safeName=String(filename||'ysm-preview').replace(/[\\/:*?"<>|]/g,'_').slice(0,100)||'ysm-preview';
     const link=document.createElement('a');link.download=`${safeName}.png`;link.href=image;link.click();
@@ -479,6 +485,16 @@ function drawCardTitle(ctx,value,width,previewHeight,cardHeight){
     const lineWidth=line.reduce((sum,run)=>{setFont(run);return sum+ctx.measureText(run.text).width;},0);let x=(width-lineWidth)/2,y=startY+index*lineHeight;
     for(const run of line){setFont(run);ctx.fillStyle=run.color;ctx.fillText(run.text,x,y);x+=ctx.measureText(run.text).width;}
   });
+  ctx.restore();
+}
+
+function drawTiledWatermark(ctx,value,color,opacity,width,height){
+  const text=String(value||'').trim();if(!text)return;
+  const size=Math.max(16,Math.round(width/34)),diagonal=Math.ceil(Math.hypot(width,height));
+  ctx.save();ctx.translate(width/2,height/2);ctx.rotate(-Math.PI/6);ctx.font=`600 ${size}px "Segoe UI", "Microsoft YaHei", sans-serif`;
+  ctx.fillStyle=/^#[0-9a-f]{6}$/i.test(color||'')?color:'#ffffff';ctx.globalAlpha=Number.isFinite(Number(opacity))?Math.min(1,Math.max(0,Number(opacity))):.2;ctx.textAlign='center';ctx.textBaseline='middle';
+  const textWidth=ctx.measureText(text).width,stepX=Math.max(textWidth+size*3,size*7),stepY=size*4.5;
+  let row=0;for(let y=-diagonal;y<=diagonal;y+=stepY,row++){const offset=row%2?stepX/2:0;for(let x=-diagonal+offset;x<=diagonal;x+=stepX)ctx.fillText(text,x,y);}
   ctx.restore();
 }
 
